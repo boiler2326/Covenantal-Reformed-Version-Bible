@@ -27,6 +27,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
+          mkdir -p output
           python scripts/translate.py \
             --in data/hebrew/${{ github.event.inputs.book }}.jsonl \
             --out output/${{ github.event.inputs.book }}.jsonl
