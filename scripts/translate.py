@@ -12,13 +12,16 @@ FORBIDDEN_ARCHAIC = [
     "hath", "doth", "saith"
 ]
 
-LEXICAL_LOCKS = {
-    "GEN 1:2": "without form",
-    "GEN 1:1": "In the beginning",
-    "GEN 1:3": "Let there be light",
+HARD_LOCKS = {
     "PHI 3:8": "excrement",
     "REV 3:16": "spew",
     "GEN 3:15": "Seed"
+}
+
+SOFT_LOCKS = {
+    "GEN 1:1": "In the beginning",
+    "GEN 1:3": "Let there be light",
+    "GEN 1:2": "without form"
 }
 def contains_forbidden_archaic(text):
     lower = text.lower()
@@ -27,9 +30,9 @@ def contains_forbidden_archaic(text):
             return word
     return None
 
-def check_lexical_locks(ref, text):
-    if ref in LEXICAL_LOCKS:
-        required = LEXICAL_LOCKS[ref]
+def check_hard_locks(ref, text):
+    if ref in HARD_LOCKS:
+        required = HARD_LOCKS[ref]
         if required not in text:
             return required
     return None
