@@ -89,9 +89,22 @@ def enforce_between_from(text: str) -> str:
 
 
 def enforce_lord_caps(text: str) -> str:
-    # Fix the specific scholarly credibility issue: "angel of the Lord" -> "angel of the LORD"
-    # (This aligns with your intent for YHWH rendering consistency. See GEN 16:9–10 mismatch.) 
+    # Keep "Lord GOD" as-is (Adonai YHWH style)
+    text = re.sub(r"\bthe Lord GOD\b", "the Lord GOD", text)
+
+    # Normalize "Lord God" -> "LORD God" (YHWH Elohim pattern)
+    text = re.sub(r"\bLord God\b", "LORD God", text)
+
+    # Normalize narrative formula "And the Lord said" -> "And the LORD said"
+    # (Genesis overwhelmingly uses YHWH in these formulas in your own output.)
+    text = re.sub(r"\bAnd the Lord said\b", "And the LORD said", text)
+
+    # General: "the Lord" -> "the LORD" (but avoid changing "Lord GOD")
+    text = re.sub(r"\bthe Lord\b(?!\s+GOD\b)", "the LORD", text)
+
+    # Keep "angel of the LORD" consistent
     text = re.sub(r"\bangel of the Lord\b", "angel of the LORD", text)
+
     return text
 
 
