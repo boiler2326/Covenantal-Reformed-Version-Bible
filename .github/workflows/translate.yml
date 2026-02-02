@@ -22,7 +22,19 @@ jobs:
 
       - name: Install dependencies
         run: pip install openai
+      - name: Fetch OSHB WLC Genesis (PD base text)
+        run: |
+            mkdir -p sources/oshb
+            curl -L -o sources/oshb/Gen.xml \ 
+            https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/Gen.xml
 
+      - name: Build Genesis.jsonl from OSHB
+        run: |
+          mkdir -p input
+          python scripts/oshb_to_jsonl.py \
+            sources/oshb/Gen.xml \
+            input/genesis.jsonl
+      
       - name: Run translation
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
