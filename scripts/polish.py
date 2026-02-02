@@ -72,7 +72,61 @@ def similarity_guard(original: str, revised: str) -> Tuple[bool, str]:
 
     return True, "ok"
 
+def enforce_between_from(text: str) -> str:
+    # separated between X and Y -> separated X from Y
+    text = re.sub(r"\bseparated between\b", "separated", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bdivid(e|ing) between\b", r"divid\1", text, flags=re.IGNORECASE)
+    # now normalize "to divide between the day and between the night" -> "to divide the day from the night"
+    text = re.sub(r"\bto divide\s+between\s+([^,;]+?)\s+and\s+between\s+([^,;]+?)\b",
+                  r"to divide \1 from \2", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bto divide\s+([^,;]+?)\s+and\s+between\s+([^,;]+?)\b",
+                  r"to divide \1 from \2", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bseparated\s+between\s+([^,;]+?)\s+and\s+the\s+([^,;]+?)\b",
+                  r"separated \1 from the \2", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bseparated\s+between\s+([^,;]+?)\s+and\s+([^,;]+?)\b",
+                  r"separated \1 from \2", text, flags=re.IGNORECASE)
+    return text
 
+
+def enforce_lord_caps(text: str) -> str:
+    # Fix the specific scholarly credibility issue: "angel of the Lord" -> "angel of the LORD"
+    # (This aligns with your intent for YHWH rendering consistency. See GEN 16:9–10 mismatch.) 
+    text = re.sub(r"\bangel of the Lord\b", "angel of the LORD", text)
+    return text
+
+
+def enforce_compound_numbers(text: str) -> str:
+    # Minimal, conservative rule: only fix explicit "... sixty and five ..." and similar patterns.
+    # This targets the known awkward pattern (e.g., GEN 5:23). 
+    text = re.sub(r"\b(sixty|seventy|eighty|ninety)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
+                  r"\1-\2", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(twenty|thirty|forty|fifty)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
+                  r"\1-\2", text, flags=re.IGNORECASE)
+    return text
+
+
+def enforce_reverential_pronouns(text: str) -> str:
+    """
+    Conservative pronoun-cap rule:
+    - Only capitalize pronouns when 'God' or 'the LORD' appears in the SAME verse text,
+      making the antecedent explicit.
+    """
+    if not re.search(r"\b(God|LORD|Lord GOD|the LORD)\b", text):
+        return text
+
+    # Replace standalone pronouns likely referring to God.
+    # We avoid 'her/him' ambiguity by only targeting He/Him/His/Himself.
+    text = re.sub(r"\bhe\b", "He", text)
+    text = re.sub(r"\bhim\b", "Him", text)
+    text = re.sub(r"\bhis\b", "His", text)
+    text = re.sub(r"\bhimself\b", "Himself", text)
+    return text
+
+
+def validate_enforcement(text: str) -> None:
+    # Hard fail: mixed LORD/Lord in the same phrase context
+    if "angel of the LORD" in text and "angel of the Lord" in text:
+        raise ValueError("Mixed 'angel of the LORD' and 'angel of the Lord' after enforcement")
 def main():
     parser = argparse.ArgumentParser(description="Phase-2 polish pass")
     parser.add_argument("--in", dest="inp", required=True)
