@@ -1,0 +1,22 @@
+name: Generate USFM
+
+on:
+  workflow_dispatch:
+
+jobs:
+  usfm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate USFM
+        run: |
+          python scripts/jsonl_to_usfm.py
+
+      - name: Commit USFM
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add usfm/GEN.usfm
+          git commit -m "Generate USFM for Genesis"
+          git push
