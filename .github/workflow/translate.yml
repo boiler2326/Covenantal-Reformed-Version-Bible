@@ -1,0 +1,40 @@
+name: Translate Scripture
+
+on:
+  workflow_dispatch:
+    inputs:
+      book:
+        description: "Book filename (e.g., genesis)"
+        required: true
+        default: "genesis"
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install openai
+
+      - name: Run translation
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python scripts/translate.py \
+            --in data/hebrew/${{ github.event.inputs.book }}.jsonl \
+            --out output/${{ github.event.inputs.book }}.jsonl
+
+      - name: Commit output
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add output/${{ github.event.inputs.book }}.jsonl
+          git commit -m "Translate ${{ github.event.inputs.book }}"
+          git push
