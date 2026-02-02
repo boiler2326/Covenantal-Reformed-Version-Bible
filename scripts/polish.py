@@ -184,8 +184,11 @@ def main():
             original = row["translation"]
 
             if ref not in targets:
-                fout.write(json.dumps({"ref": ref, "translation": original}, ensure_ascii=False) + "\n")
-                continue
+               out_text = original
+               if args.enforce:
+            out_text = apply_enforcement(out_text)
+               fout.write(json.dumps({"ref": ref, "translation": out_text}, ensure_ascii=False) + "\n")
+               continue
 
             user_prompt = (
                 f"REFERENCE: {ref}\n"
