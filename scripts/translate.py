@@ -23,12 +23,11 @@ SOFT_LOCKS = {
     "GEN 1:3": "Let there be light",
     "GEN 1:2": "without form"
 }
+FORBIDDEN_ARCHAIC_PAT = re.compile(r"\b(" + "|".join(FORBIDDEN_ARCHAIC_WORDS) + r")\b", re.IGNORECASE)
+
 def contains_forbidden_archaic(text):
-    lower = text.lower()
-    for word in FORBIDDEN_ARCHAIC:
-        if word in lower:
-            return word
-    return None
+    m = FORBIDDEN_ARCHAIC_PAT.search(text)
+    return m.group(1).lower() if m else None
 
 def check_hard_locks(ref, text):
     if ref in HARD_LOCKS:
@@ -84,7 +83,8 @@ SOURCE TEXT:
             text = response.output_text.strip()
 
             bad = contains_forbidden_archaic(text)
-            if bad:
+           if bad:
+                print(f"Offending output for {verse['ref']}: {text}")
                 raise ValueError(f"Forbidden archaic term '{bad}' in {verse['ref']}")
 
             lock = check_hard_locks(verse["ref"], text)
