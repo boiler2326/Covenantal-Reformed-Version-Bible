@@ -122,6 +122,13 @@ def enforce_reverential_pronouns(text: str) -> str:
     text = re.sub(r"\bhimself\b", "Himself", text)
     return text
 
+def apply_enforcement(text: str) -> str:
+    text = enforce_lord_caps(text)
+    text = enforce_between_from(text)
+    text = enforce_compound_numbers(text)
+    text = enforce_reverential_pronouns(text)
+    validate_enforcement(text)
+    return text
 
 def validate_enforcement(text: str) -> None:
     # Hard fail: mixed LORD/Lord in the same phrase context
