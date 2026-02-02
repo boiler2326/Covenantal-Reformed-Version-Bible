@@ -7,11 +7,6 @@ import re
 import time
 from openai import OpenAI
 
-FORBIDDEN_ARCHAIC = [
-    "thee", "thou", "thy", "thine", "ye",
-    "hath", "doth", "saith"
-]
-
 HARD_LOCKS = {
     "PHI 3:8": "excrement",
     "REV 3:16": "spew",
@@ -23,7 +18,15 @@ SOFT_LOCKS = {
     "GEN 1:3": "Let there be light",
     "GEN 1:2": "without form"
 }
-FORBIDDEN_ARCHAIC_PAT = re.compile(r"\b(" + "|".join(FORBIDDEN_ARCHAIC_WORDS) + r")\b", re.IGNORECASE)
+FORBIDDEN_ARCHAIC_WORDS = [
+    "thee", "thou", "thy", "thine", "ye",
+    "hath", "doth", "saith", "unto"
+]
+
+FORBIDDEN_ARCHAIC_PAT = re.compile(
+    r"\b(" + "|".join(FORBIDDEN_ARCHAIC_WORDS) + r")\b",
+    re.IGNORECASE
+)
 
 def contains_forbidden_archaic(text):
     m = FORBIDDEN_ARCHAIC_PAT.search(text)
