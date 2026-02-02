@@ -54,6 +54,10 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+
           git add "output/${{ github.event.inputs.book }}.jsonl"
-          git commit -m "Translate ${{ github.event.inputs.book }} (Phase 1)"
-          git push
+          git commit -m "Translate ${{ github.event.inputs.book }} (Phase 1)" || echo "Nothing to commit"
+
+          # Sync with remote in case main advanced while this job was running
+          git pull --rebase origin main
+          git push origin main
