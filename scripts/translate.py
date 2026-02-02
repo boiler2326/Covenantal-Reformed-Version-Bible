@@ -56,7 +56,7 @@ def main():
             user_prompt = f"""
 REFERENCE: {verse['ref']}
 Translate the following SOURCE TEXT into Modern Sacral English under the established charter.
-Output only the translated verse text with verse numbering preserved.
+Output only the translated verse text. Do NOT include the verse number.
 
 SOURCE TEXT:
 {verse['source']}
