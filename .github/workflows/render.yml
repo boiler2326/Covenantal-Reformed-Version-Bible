@@ -1,0 +1,40 @@
+name: Render Readable Text
+
+on:
+  workflow_dispatch:
+    inputs:
+      book:
+        description: "Book filename (e.g., genesis)"
+        required: true
+        default: "genesis"
+      source_folder:
+        description: "Source folder (output or output_phase2)"
+        required: true
+        default: "output_phase2"
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Render
+        run: |
+          python scripts/render_readable.py \
+            --in "${{ github.event.inputs.source_folder }}/${{ github.event.inputs.book }}.jsonl" \
+            --out_txt "readable/${{ github.event.inputs.book }}.txt" \
+            --out_md "readable/${{ github.event.inputs.book }}.md" \
+            --title "${{ github.event.inputs.book }} (CRV)"
+
+      - name: Commit rendered files
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add "readable/${{ github.event.inputs.book }}.txt" "readable/${{ github.event.inputs.book }}.md"
+          git commit -m "Render readable ${{ github.event.inputs.book }}"
+          git push
