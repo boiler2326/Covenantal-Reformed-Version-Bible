@@ -13,11 +13,13 @@ FORBIDDEN_ARCHAIC = [
 ]
 
 LEXICAL_LOCKS = {
+    "GEN 1:2": "without form",
+    "GEN 1:1": "In the beginning",
+    "GEN 1:3": "Let there be light",
     "PHI 3:8": "excrement",
     "REV 3:16": "spew",
     "GEN 3:15": "Seed"
 }
-
 def contains_forbidden_archaic(text):
     lower = text.lower()
     for word in FORBIDDEN_ARCHAIC:
