@@ -83,6 +83,11 @@ def similarity_guard(original: str, revised: str) -> Tuple[bool, str]:
 # Enforcement rules
 # -------------------------
 
+def collapse_internal_newlines(text: str) -> str:
+    # E0: Verse atomicity — remove internal line breaks
+    return normalize_space(text.replace("\r\n", " ").replace("\n", " "))
+
+
 def validate_enforcement(text: str) -> None:
     # Hard fail: mixed LORD/Lord in the same phrase context
     if "angel of the LORD" in text and "angel of the Lord" in text:
@@ -90,12 +95,9 @@ def validate_enforcement(text: str) -> None:
 
 
 def enforce_between_from(text: str) -> str:
-    # Normalize common Hebrew calque: "separated between X and Y" -> "separated X from Y"
-    # First, remove "between" after "separated/divide" when it appears as a direct calque.
     text = re.sub(r"\bseparated between\b", "separated", text, flags=re.IGNORECASE)
     text = re.sub(r"\bdivid(e|ing) between\b", r"divid\1", text, flags=re.IGNORECASE)
 
-    # Specific patterns seen in Genesis:
     text = re.sub(
         r"\bto divide\s+between\s+([^,;]+?)\s+and\s+between\s+([^,;]+?)\b",
         r"to divide \1 from \2",
@@ -124,24 +126,14 @@ def enforce_between_from(text: str) -> str:
 
 
 def enforce_lord_caps(text: str) -> str:
-    # Keep "Lord GOD" as-is (Adonai YHWH style) if it appears.
-    # Normalize "Lord God" -> "LORD God" (YHWH Elohim pattern)
     text = re.sub(r"\bLord God\b", "LORD God", text)
-
-    # Normalize narrative formula "And the Lord said" -> "And the LORD said"
     text = re.sub(r"\bAnd the Lord said\b", "And the LORD said", text)
-
-    # General: "the Lord" -> "the LORD" (but avoid changing "Lord GOD")
     text = re.sub(r"\bthe Lord\b(?!\s+GOD\b)", "the LORD", text)
-
-    # Keep "angel of the LORD" consistent
     text = re.sub(r"\bangel of the Lord\b", "angel of the LORD", text)
-
     return text
 
 
 def enforce_compound_numbers(text: str) -> str:
-    # Fix explicit "... sixty and five ..." patterns into "... sixty-five ..."
     text = re.sub(
         r"\b(sixty|seventy|eighty|ninety)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
         r"\1-\2",
@@ -160,13 +152,18 @@ def enforce_compound_numbers(text: str) -> str:
 def enforce_reverential_pronouns(text: str) -> str:
     """
     Conservative reverential caps:
-    - Only capitalize He/Him/His/Himself when 'God' or 'LORD' appears in the SAME verse,
-      making the antecedent explicit.
+    Only capitalize He/Him/His/Himself when the clause explicitly names God/LORD
+    as the grammatical subject.
     """
-    if not re.search(r"\b(God|LORD|Lord GOD|the LORD)\b", text):
+    patterns = [
+        r"\bGod\s+(said|did|made|created|saw|called|blessed|commanded|formed)\b",
+        r"\bthe LORD\s+(said|did|made|saw|called|commanded|appeared)\b",
+        r"\bthe LORD God\s+(said|did|made|formed|took|placed)\b",
+    ]
+
+    if not any(re.search(p, text) for p in patterns):
         return text
 
-    # Only target clear third-person masculine pronouns.
     text = re.sub(r"\bhe\b", "He", text)
     text = re.sub(r"\bhim\b", "Him", text)
     text = re.sub(r"\bhis\b", "His", text)
@@ -175,6 +172,7 @@ def enforce_reverential_pronouns(text: str) -> str:
 
 
 def apply_enforcement(text: str) -> str:
+    text = collapse_internal_newlines(text)
     text = enforce_lord_caps(text)
     text = enforce_between_from(text)
     text = enforce_compound_numbers(text)
@@ -189,15 +187,15 @@ def apply_enforcement(text: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Phase-2 polish pass")
-    parser.add_argument("--in", dest="inp", required=True, help="Phase-1 input JSONL (ref, translation)")
-    parser.add_argument("--out", dest="out", required=True, help="Phase-2 output JSONL (ref, translation)")
-    parser.add_argument("--targets", required=True, help="JSONL targets list (one {'ref':...} per line)")
-    parser.add_argument("--charter", required=True, help="Phase-2 charter text file")
+    parser.add_argument("--in", dest="inp", required=True)
+    parser.add_argument("--out", dest="out", required=True)
+    parser.add_argument("--targets", required=True)
+    parser.add_argument("--charter", required=True)
     parser.add_argument("--model", default="gpt-5.1")
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--sleep", type=float, default=0.0)
     parser.add_argument("--max_output_tokens", type=int, default=300)
-    parser.add_argument("--enforce", action="store_true", help="Apply deterministic enforcement rules to all verses")
+    parser.add_argument("--enforce", action="store_true")
     args = parser.parse_args()
 
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -215,9 +213,8 @@ def main() -> None:
         + "\n\n"
         + "PHASE-2 OPERATIONAL RULES\n"
         + "- You are NOT translating Hebrew or Greek.\n"
-        + "- Revise English ONLY for cadence, beauty, and recognizability.\n"
+        + "- Revise English ONLY for cadence and beauty.\n"
         + "- Meaning must remain unchanged.\n"
-        + "- Do NOT add verse numbers, headings, or commentary.\n"
         + "- Output ONLY the revised verse text.\n"
     )
 
@@ -230,11 +227,8 @@ def main() -> None:
         for row in phase1_rows:
             ref = row["ref"]
             original = row["translation"]
-
-            # Default output is the Phase-1 text
             out_text = original
 
-            # Only call the model for verses in the targets list
             if ref in targets:
                 user_prompt = (
                     f"REFERENCE: {ref}\n"
@@ -266,7 +260,6 @@ def main() -> None:
                     blocked += 1
                     out_text = original
 
-            # Apply deterministic enforcement to ALL verses (targets and non-targets) if enabled
             if args.enforce:
                 out_text = apply_enforcement(out_text)
 
