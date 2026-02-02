@@ -83,8 +83,8 @@ SOURCE TEXT:
             text = response.output_text.strip()
 
             bad = contains_forbidden_archaic(text)
-           if bad:
-                print(f"Offending output for {verse['ref']}: {text}")
+            if bad is not None:
+               print(f"Offending output for {verse['ref']}: {text}")
                 raise ValueError(f"Forbidden archaic term '{bad}' in {verse['ref']}")
 
             lock = check_hard_locks(verse["ref"], text)
