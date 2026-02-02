@@ -40,7 +40,7 @@ jobs:
             --in output/${{ github.event.inputs.book }}.jsonl \
             --targets phase2/targets.jsonl \
             --charter charter/phase2_charter.txt \
-            --out output_phase2/${{ github.event.inputs.book }}.jsonl
+            --out output_phase2/${{ github.event.inputs.book }}.jsonl \
             --enforce
 
       - name: Commit polished output
