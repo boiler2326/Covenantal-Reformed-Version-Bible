@@ -26,7 +26,7 @@ jobs:
       - name: Fetch OSHB WLC Genesis (Hebrew source)
         run: |
           mkdir -p sources/oshb
-          curl -L https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/Gen.xml -o sources/oshb/Gen.xml
+          curl -fL https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/Gen.xml -o sources/oshb/Gen.xml
 
       - name: Build Genesis.jsonl from OSHB
         run: |
@@ -40,8 +40,12 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           mkdir -p output
+          echo "Input line count:"
+          wc -l input/${{ github.event.inputs.book }}.jsonl
+          echo "First 3 lines:"
+          head -n 3 input/${{ github.event.inputs.book }}.jsonl
           python scripts/translate.py \
-            --in data/hebrew/${{ github.event.inputs.book }}.jsonl \
+            --in input/${{ github.event.inputs.book }}.jsonl \
             --out output/${{ github.event.inputs.book }}.jsonl
 
       - name: Commit output
