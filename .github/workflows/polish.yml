@@ -30,23 +30,19 @@ jobs:
           test -f output/${{ github.event.inputs.book }}.jsonl
           test -f phase2/targets.jsonl
           test -f charter/phase2_charter.txt
+          test -f scripts/polish.py
 
       - name: Run Phase 2 polish
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           mkdir -p output_phase2
-          python scripts/polish.py \
-            --in output/${{ github.event.inputs.book }}.jsonl \
-            --targets phase2/targets.jsonl \
-            --charter charter/phase2_charter.txt \
-            --out output_phase2/${{ github.event.inputs.book }}.jsonl \
-            --enforce
+          python scripts/polish.py --in output/${{ github.event.inputs.book }}.jsonl --targets phase2/targets.jsonl --charter charter/phase2_charter.txt --out output_phase2/${{ github.event.inputs.book }}.jsonl --enforce
 
       - name: Commit polished output
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add output_phase2/${{ github.event.inputs.book }}.jsonl
-          git commit -m "Phase 2 polish: ${{ github.event.inputs.book }}"
+          git commit -m "Phase 2 polish: ${{ github.event.inputs.book }}" || echo "No changes to commit"
           git push
