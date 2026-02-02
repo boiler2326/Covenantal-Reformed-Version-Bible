@@ -37,6 +37,10 @@ def check_hard_locks(ref, text):
             return required
     return None
 
+def soft_lock_warning(ref, text):
+    if ref in SOFT_LOCKS and SOFT_LOCKS[ref] not in text:
+        print(f"WARNING: Soft lock '{SOFT_LOCKS[ref]}' not found in {ref}")
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--in", dest="inp", required=True)
@@ -83,14 +87,16 @@ SOURCE TEXT:
             if bad:
                 raise ValueError(f"Forbidden archaic term '{bad}' in {verse['ref']}")
 
-            lock = check_lexical_locks(verse["ref"], text)
+            lock = check_hard_locks(verse["ref"], text)
             if lock:
-                raise ValueError(f"Missing lexical lock '{lock}' in {verse['ref']}")
+                raise ValueError(f"Missing HARD lock '{lock}' in {verse['ref']}")
 
             fout.write(json.dumps({
                 "ref": verse["ref"],
                 "translation": text
             }, ensure_ascii=False) + "\n")
+
+            soft_lock_warning(verse["ref"], text)
 
             if args.sleep:
                 time.sleep(args.sleep)
