@@ -22,11 +22,11 @@ jobs:
 
       - name: Install dependencies
         run: pip install openai
-      - name: Fetch OSHB WLC Genesis (PD base text)
+        
+      - name: Fetch OSHB WLC Genesis (Hebrew source)
         run: |
-            mkdir -p sources/oshb
-            curl -L -o sources/oshb/Gen.xml \ 
-            https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/Gen.xml
+          mkdir -p sources/oshb
+          curl -L https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/Gen.xml -o sources/oshb/Gen.xml
 
       - name: Build Genesis.jsonl from OSHB
         run: |
