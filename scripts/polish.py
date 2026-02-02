@@ -137,7 +137,13 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--sleep", type=float, default=0.0)
     parser.add_argument("--max_output_tokens", type=int, default=300)
+    parser.add_argument(
+    "--enforce",
+    action="store_true",
+    help="Apply deterministic Phase-2 enforcement rules"
+    )
     args = parser.parse_args()
+    
 
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
@@ -193,6 +199,14 @@ def main():
             )
 
             revised = response.output_text.strip()
+
+            if args.enforce:
+                revised = enforce_lord_caps(revised)
+                revised = enforce_between_from(revised)
+                revised = enforce_compound_numbers(revised)
+                revised = enforce_reverential_pronouns(revised)
+                validate_enforcement(revised)
+            
             ok, reason = similarity_guard(original, revised)
 
             if not ok:
