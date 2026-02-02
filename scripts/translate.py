@@ -7,11 +7,6 @@ import re
 import time
 from openai import OpenAI
 
-- name: Fetch OSHB WLC Genesis (PD base text)
-  run: |
-    mkdir -p sources/oshb
-    curl -L -o sources/oshb/Gen.xml "https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/Gen.xml"
-
 FORBIDDEN_ARCHAIC = [
     "thee", "thou", "thy", "thine", "ye",
     "hath", "doth", "saith"
