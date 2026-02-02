@@ -1,0 +1,51 @@
+PHASE-2 ENFORCEMENT CHARTER (Cadence & Consistency)
+
+Purpose
+- Enforce project-wide consistency rules after Phase-2 polishing.
+- These rules are deterministic: apply the same way every time.
+- No semantic changes are permitted; enforcement is limited to formatting, casing, and a small set of approved idiomatic calque fixes.
+
+Scope
+- Applies to Phase-2 outputs only (output_phase2/*.jsonl).
+- Operates verse-by-verse on the English translation field.
+
+ENFORCEMENT RULES (Deterministic)
+
+Rule E1 — Divine Name Consistency
+- Render YHWH as LORD (all caps).
+- In practice: the token "LORD" must be consistent within formulaic phrases.
+- If a verse contains "angel of the LORD", do NOT permit "angel of the Lord" in the same referent context.
+
+Rule E2 — Reverential Pronoun Capitalization (ON)
+- When a third-person pronoun clearly refers to God, capitalize:
+  He, Him, His, Himself
+- Maintain capitalization already present.
+- Do not capitalize pronouns that refer to men, angels, nations, idols, or ambiguous antecedents.
+
+Rule E3 — Approved Calque Correction (“between … and …”)
+- Replace wooden calques of the pattern:
+  "separated between X and Y"
+  with:
+  "separated X from Y"
+- Likewise:
+  "to divide between X and between Y" -> "to divide X from Y"
+- This is approved as an English idiom correction that preserves the Hebrew sense while restoring recognizability and beauty.
+
+Rule E4 — Compound Number Readability
+- In spelled-out compound numbers, do not use “and” inside the number:
+  "three hundred sixty and five" -> "three hundred sixty-five"
+  "nine hundred ninety and nine" -> "nine hundred ninety-nine"
+- Keep "and" in constructions like "hundred and twenty" ONLY if the project’s chosen style explicitly permits it. (Default: do not insert 'and' unless already present in Phase-1.)
+
+Rule E5 — Seed Capitalization Policy (Messianic/Redemptive Line)
+- Capitalize Seed when it denotes the redemptive line (protoevangelium and Abrahamic promise trajectory).
+- Keep seed lowercase for ordinary biological/agricultural meaning.
+- Do not allow mixed casing for the same covenant-promise sentence.
+
+Validation & Failure Policy
+- If enforcement cannot be applied safely (e.g., ambiguous pronoun antecedent for E2), do not guess: leave the text unchanged and emit a WARNING log entry.
+- If after enforcement a verse contains both "angel of the LORD" and "angel of the Lord", FAIL the run (hard error), as this undermines scholarly credibility.
+
+Output
+- The enforcement step MUST output valid JSONL with the same verse refs.
+- Enforcement MUST NOT add headings, footnotes, or verse numbers.
