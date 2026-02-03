@@ -4,24 +4,26 @@ on:
   workflow_dispatch:
     inputs:
       book:
-        description: "Book slug (e.g., genesis, exodus)"
+        description: "Book slug (e.g., genesis, exodus, leviticus)"
         required: true
-        default: "exodus"
+        default: "genesis"
       oshb_xml:
-        description: "OSHB WLC XML filename (e.g., Gen.xml, Exod.xml)"
+        description: "OSHB WLC XML filename (e.g., Gen.xml, Exod.xml, Lev.xml)"
         required: true
-        default: "Exod.xml"
+        default: "Gen.xml"
 
 concurrency:
-  group: translate-${{ github.ref }}
+  group: translate-${{ github.ref }}-${{ github.event.inputs.book }}
   cancel-in-progress: false
-  
+
 jobs:
   translate:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -34,34 +36,48 @@ jobs:
 
       - name: Fetch OSHB WLC XML
         run: |
+          set -euo pipefail
           mkdir -p sources/oshb
-          curl -L "https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/${{ github.event.inputs.oshb_xml }}" \
+          curl -L \
+            "https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/${{ github.event.inputs.oshb_xml }}" \
             -o "sources/oshb/${{ github.event.inputs.oshb_xml }}"
 
       - name: Build input JSONL from OSHB
         run: |
+          set -euo pipefail
           mkdir -p input
           python scripts/oshb_to_jsonl.py \
             "sources/oshb/${{ github.event.inputs.oshb_xml }}" \
             "input/${{ github.event.inputs.book }}.jsonl"
 
+      - name: Preview input (sanity check)
+        run: |
+          echo "Input line count:"
+          wc -l "input/${{ github.event.inputs.book }}.jsonl"
+          echo ""
+          echo "First 3 verses:"
+          head -n 3 "input/${{ github.event.inputs.book }}.jsonl"
+
       - name: Run translation (Phase 1)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
+          set -euo pipefail
           mkdir -p output
           python scripts/translate.py \
             --in "input/${{ github.event.inputs.book }}.jsonl" \
             --out "output/${{ github.event.inputs.book }}.jsonl"
 
-      - name: Commit output
+      - name: Commit Phase 1 output
         run: |
+          set -euo pipefail
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
           git add "output/${{ github.event.inputs.book }}.jsonl"
-          git commit -m "Translate ${{ github.event.inputs.book }} (Phase 1)" || echo "Nothing to commit"
 
-          # Sync with remote in case main advanced while this job was running
+          git commit -m "Translate ${{ github.event.inputs.book }} (Phase 1)" || echo "No changes to commit"
+
+          # Sync in case main advanced while the job was running
           git pull --rebase origin main
           git push origin main
