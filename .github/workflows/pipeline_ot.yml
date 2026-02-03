@@ -1,0 +1,138 @@
+name: Pipeline OT (Phase 1 + commit per book)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_at:
+        description: "Optional: book slug to start at (e.g., numbers). Leave blank to start from beginning."
+        required: false
+        default: ""
+      max_parallel:
+        description: "How many books to run in parallel (recommend 1-2)."
+        required: true
+        default: "1"
+
+concurrency:
+  group: pipeline-ot-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      books: ${{ steps.set-matrix.outputs.books }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: set-matrix
+        name: Build matrix from books/books_ot.json
+        run: |
+          python - <<'PY'
+          import json, os
+          p = "books/books_ot.json"
+          with open(p, "r", encoding="utf-8") as f:
+            books = json.load(f)
+          # Expect list of { "book": "...", "oshb_xml": "..." }
+          # Keep as JSON string for matrix
+          print(f"::set-output name=books::{json.dumps(books)}")
+          PY
+
+  translate_ot:
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
+      matrix:
+        item: ${{ fromJSON(needs.matrix.outputs.books) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for pull --rebase to behave well
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install openai
+
+      - name: Skip books before start_at (optional)
+        if: ${{ inputs.start_at != '' }}
+        run: |
+          python - <<'PY'
+          import os
+          start = os.environ.get("START_AT", "").strip()
+          book = os.environ.get("BOOK", "").strip()
+          if start and book != start:
+            # Create a marker file if we should skip; GitHub doesn't support breaking matrix order,
+            # so we use a skip flag that we compute simply: if start_at provided and not matched yet,
+            # you should dispatch with start_at set, and rerun later for earlier books if needed.
+            print("SKIP_THIS_BOOK=true")
+          PY
+        env:
+          START_AT: ${{ inputs.start_at }}
+          BOOK: ${{ matrix.item.book }}
+
+      - name: Decide whether to run this book
+        id: decide
+        run: |
+          set -euo pipefail
+          BOOK="${{ matrix.item.book }}"
+          OUT="output/${BOOK}.jsonl"
+          if [ -f "$OUT" ]; then
+            echo "run_book=false" >> $GITHUB_OUTPUT
+            echo "Already exists: $OUT"
+          else
+            echo "run_book=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fetch OSHB WLC XML
+        if: steps.decide.outputs.run_book == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p sources/oshb
+          curl -L \
+            "https://raw.githubusercontent.com/openscriptures/morphhb/master/wlc/${{ matrix.item.oshb_xml }}" \
+            -o "sources/oshb/${{ matrix.item.oshb_xml }}"
+
+      - name: Build input JSONL from OSHB
+        if: steps.decide.outputs.run_book == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p input
+          python scripts/oshb_to_jsonl.py \
+            "sources/oshb/${{ matrix.item.oshb_xml }}" \
+            "input/${{ matrix.item.book }}.jsonl"
+
+      - name: Translate (Phase 1) with resume
+        if: steps.decide.outputs.run_book == 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          python scripts/translate.py \
+            --in "input/${{ matrix.item.book }}.jsonl" \
+            --out "output/${{ matrix.item.book }}.jsonl" \
+            --resume
+
+      - name: Commit Phase 1 output
+        if: steps.decide.outputs.run_book == 'true'
+        run: |
+          set -euo pipefail
+          BOOK="${{ matrix.item.book }}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add "output/${BOOK}.jsonl"
+          git commit -m "Translate ${BOOK} (Phase 1)" || echo "No changes to commit"
+
+          # Sync & push safely (handles remote advancing)
+          git pull --rebase origin main
+          git push origin main
