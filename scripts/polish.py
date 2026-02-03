@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """
-Phase-2 polish pass: cadence + beauty (optionally via model), plus deterministic enforcement.
+Phase-2 cadence & beauty polish.
 
-IMPORTANT:
-- This script does NOT change pronoun capitalization (He/His etc).
-- Pronouns are handled ONLY by scripts/kjv_pronouns.py (KJV normalization step).
+IMPORTANT DESIGN:
+- Phase 2 is for cadence/beauty ONLY and must not "decide" divine pronouns.
+- Divine pronoun capitalization is handled downstream by KJV normalization
+  (your Option 2: caps + decaps by KJV), not here.
 
-Input JSONL schema:
+This script therefore avoids pronoun heuristics, with ONLY a few narrow,
+explicitly requested, deterministic corrections:
+  - "The Lord, the God" -> "The LORD, the God"
+  - If "Pharaoh" appears: "His servants" -> "his servants"
+  - "by my name" -> "by My name"
+
+Input JSONL:
 {"ref":"EXOD 1:1","translation":"..."}
 
-Targets JSONL schema:
+Targets JSONL:
 {"ref":"EXOD 1:1"}
 
-Output schema matches input.
+Output JSONL matches input.
 """
 
 import argparse
@@ -99,61 +106,63 @@ def similarity_guard(original: str, revised: str) -> Tuple[bool, str]:
 
 
 # ----------------------------
-# Deterministic enforcement (NO pronoun changes)
+# Deterministic enforcement (NO general pronoun changes)
 # ----------------------------
 
 def enforce_no_internal_line_breaks(text: str) -> str:
-    # Replace internal newlines with spaces (important for poetry sections)
-    text = re.sub(r"[\r\n]+", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    # Replace embedded newlines with spaces and normalize whitespace
+    t = re.sub(r"[\r\n]+", " ", text)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
 
 
 def enforce_between_from(text: str) -> str:
-    text = re.sub(r"\bseparated between\b", "separated", text, flags=re.IGNORECASE)
-    text = re.sub(r"\bdivid(e|ing) between\b", r"divid\1", text, flags=re.IGNORECASE)
+    t = text
+    t = re.sub(r"\bseparated between\b", "separated", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bdivid(e|ing) between\b", r"divid\1", t, flags=re.IGNORECASE)
 
-    text = re.sub(
+    t = re.sub(
         r"\bto divide\s+between\s+([^,;]+?)\s+and\s+between\s+([^,;]+?)\b",
         r"to divide \1 from \2",
-        text,
+        t,
         flags=re.IGNORECASE,
     )
-    text = re.sub(
+    t = re.sub(
         r"\bto divide\s+([^,;]+?)\s+and\s+between\s+([^,;]+?)\b",
         r"to divide \1 from \2",
-        text,
+        t,
         flags=re.IGNORECASE,
     )
-    text = re.sub(
+    t = re.sub(
         r"\bseparated\s+between\s+([^,;]+?)\s+and\s+the\s+([^,;]+?)\b",
         r"separated \1 from the \2",
-        text,
+        t,
         flags=re.IGNORECASE,
     )
-    text = re.sub(
+    t = re.sub(
         r"\bseparated\s+between\s+([^,;]+?)\s+and\s+([^,;]+?)\b",
         r"separated \1 from \2",
-        text,
+        t,
         flags=re.IGNORECASE,
     )
-    return text
+    return t
 
 
 def enforce_compound_numbers(text: str) -> str:
-    text = re.sub(
+    t = text
+    t = re.sub(
         r"\b(sixty|seventy|eighty|ninety)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
         r"\1-\2",
-        text,
+        t,
         flags=re.IGNORECASE,
     )
-    text = re.sub(
+    t = re.sub(
         r"\b(twenty|thirty|forty|fifty)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
         r"\1-\2",
-        text,
+        t,
         flags=re.IGNORECASE,
     )
-    return text
+    return t
 
 
 def enforce_lord_caps(text: str) -> str:
@@ -162,7 +171,7 @@ def enforce_lord_caps(text: str) -> str:
     """
     t = text
 
-    # Preserve "Lord GOD" phrases
+    # Preserve "Lord GOD" phrases as-is
     t = re.sub(r"\bLord GOD\b", "Lord GOD", t)
     t = re.sub(r"\bthe Lord GOD\b", "the Lord GOD", t)
 
@@ -181,20 +190,51 @@ def enforce_lord_caps(text: str) -> str:
     for pat, rep in patterns:
         t = re.sub(pat, rep, t)
 
-    # punctuation variants
+    # Punctuation variants
     t = re.sub(r"\bThe Lord,\b", "The LORD,", t)
     t = re.sub(r"\bthe Lord,\b", "the LORD,", t)
 
-    # general "the Lord" -> "the LORD" (avoid "the LORD GOD")
+    # General "the Lord" -> "the LORD" (avoid "the LORD GOD")
     t = re.sub(r"\bthe Lord\b(?!\s+GOD\b)", "the LORD", t)
 
     # "Lord God" -> "LORD God"
     t = re.sub(r"\bLord God\b", "LORD God", t)
 
-    # "angel of the LORD"
+    # Keep "angel of the LORD" consistent
     t = re.sub(r"\bangel of the Lord\b", "angel of the LORD", t)
 
     return t
+
+
+def enforce_yhwh_titlecase(text: str) -> str:
+    """
+    Fix cases like 'The Lord, the God of...' that should be 'The LORD, the God of...'
+    Very narrow: only when 'the God' immediately follows.
+    """
+    t = text
+    t = re.sub(r"\bThe Lord,\s+the God\b", "The LORD, the God", t)
+    t = re.sub(r"\bthe Lord,\s+the God\b", "the LORD, the God", t)
+    return t
+
+
+def enforce_pharaoh_servants_pronoun(text: str) -> str:
+    """
+    If Pharaoh is explicit and we see 'His servants' in the same verse,
+    force lowercase because antecedent is Pharaoh.
+    Narrow + safe.
+    """
+    t = text
+    if re.search(r"\bPharaoh\b", t) and re.search(r"\bHis servants\b", t):
+        t = re.sub(r"\bHis servants\b", "his servants", t)
+    return t
+
+
+def enforce_by_my_name_my(text: str) -> str:
+    """
+    Fix 'by my name' -> 'by My name' (narrow).
+    Only triggers for the specific phrase to avoid broad pronoun heuristics.
+    """
+    return re.sub(r"\bby my name\b", "by My name", text)
 
 
 def validate_enforcement(text: str) -> None:
@@ -205,9 +245,19 @@ def validate_enforcement(text: str) -> None:
 def apply_enforcement(text: str) -> str:
     t = text
     t = enforce_no_internal_line_breaks(t)
+
+    # LORD/YHWH conventions
     t = enforce_lord_caps(t)
+    t = enforce_yhwh_titlecase(t)
+
+    # Narrow, safe, explicitly requested fixes
+    t = enforce_pharaoh_servants_pronoun(t)
+    t = enforce_by_my_name_my(t)
+
+    # Other style normalizations
     t = enforce_between_from(t)
     t = enforce_compound_numbers(t)
+
     validate_enforcement(t)
     return t
 
@@ -217,7 +267,7 @@ def apply_enforcement(text: str) -> str:
 # ----------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Phase-2 cadence/beauty polish (no pronoun changes).")
+    parser = argparse.ArgumentParser(description="Phase-2 cadence/beauty polish (no pronoun heuristics).")
     parser.add_argument("--in", dest="inp", required=True)
     parser.add_argument("--out", dest="out", required=True)
     parser.add_argument("--targets", required=True)
@@ -226,8 +276,8 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--max_output_tokens", type=int, default=300)
     parser.add_argument("--sleep", type=float, default=0.0)
-    parser.add_argument("--enforce", action="store_true")
-    parser.add_argument("--enforce_only", action="store_true")
+    parser.add_argument("--enforce", action="store_true", help="Apply deterministic enforcement rules")
+    parser.add_argument("--enforce_only", action="store_true", help="Skip model calls; enforcement-only pass")
     args = parser.parse_args()
 
     targets = load_targets_jsonl(args.targets)
@@ -305,7 +355,7 @@ def main() -> None:
                         changed_by_model += 1
 
             else:
-                # non-target or enforce-only
+                # Non-target or enforce-only
                 if args.enforce:
                     enforced = apply_enforcement(out_text)
                     if normalize_space(enforced) != normalize_space(out_text):
