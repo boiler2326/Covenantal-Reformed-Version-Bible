@@ -1,0 +1,37 @@
+name: Build KJV JSONL
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-kjv:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch KJV OSIS (public domain)
+        run: |
+          mkdir -p sources/kjv
+          curl -L \
+            https://raw.githubusercontent.com/seven1m/open-bibles/master/eng-kjv.osis.xml \
+            -o sources/kjv/eng-kjv.osis.xml
+
+      - name: Convert OSIS to JSONL
+        run: |
+          python scripts/osis_to_kjv_jsonl.py \
+            sources/kjv/eng-kjv.osis.xml \
+            sources/kjv/kjv.jsonl
+
+      - name: Commit KJV JSONL
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add sources/kjv
+          git commit -m "Add public-domain KJV JSONL source" || exit 0
+          git push
