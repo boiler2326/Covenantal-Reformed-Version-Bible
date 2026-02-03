@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
 """
-KJV-gated pronoun capitalization pass (NO API).
+KJV-gated pronoun normalization (FULL caps + decaps) - NO API.
 
-Input:
-- Your book JSONL: {"ref":"EXOD 4:27","translation":"..."}
-- KJV JSONL: {"ref":"EXOD 4:27","kjv":"..."}
+Input book JSONL:
+{"ref":"EXOD 4:27","translation":"..."}
+
+Input KJV JSONL:
+{"ref":"EXOD 4:27","kjv":"..."}
 
 Output:
-- Fixed JSONL (same schema as input)
-- Review targets JSONL listing refs that are ambiguous ("mixed" in KJV)
-- Stats printed to stdout
+- normalized book JSONL
+- review targets JSONL (mixed verses, missing KJV, etc.)
+- optional stats JSON
 
-Gating logic:
-- If KJV verse contains ONLY divine-caps pronouns (He/Him/His/Himself) and NO lowercase he/him/his/himself:
-  -> capitalize those pronouns in your verse.
-- If KJV verse contains ONLY lowercase he/him/his/himself and NO divine-caps:
-  -> lowercase those pronouns in your verse.
+Rules (Option 2):
+- If KJV verse contains ONLY divine caps (He/Him/His/Himself) and NO lowercase he/him/his/himself:
+    => force-cap those pronouns in your verse.
+- If KJV verse contains ONLY lowercase he/him/his/himself and NO divine caps:
+    => force-decap those pronouns in your verse.
 - If KJV verse contains BOTH (mixed):
-  -> do NOT change; add to review list.
+    => by default: SKIP changes and add to review list.
 - If KJV verse contains neither:
-  -> do NOT change.
+    => do nothing.
 
-This intentionally avoids the “endless rerun” trap: mixed verses require human judgment.
+Notes:
+- We only touch these tokens: he/him/his/himself and He/Him/His/Himself
+- We do NOT change wording, punctuation, spacing, or other capitalization.
 """
 
 import argparse
@@ -30,11 +34,15 @@ import os
 import re
 from typing import Dict, List, Tuple
 
+
 DIV_CAP_RE = re.compile(r"\b(He|Him|His|Himself)\b")
 HUM_LOW_RE = re.compile(r"\b(he|him|his|himself)\b")
 
 LOW_TO_CAP = {"he": "He", "him": "Him", "his": "His", "himself": "Himself"}
 CAP_TO_LOW = {v: k for k, v in LOW_TO_CAP.items()}
+
+LOW_REPLACE_RE = re.compile(r"\b(he|him|his|himself)\b")
+CAP_REPLACE_RE = re.compile(r"\b(He|Him|His|Himself)\b")
 
 
 def load_jsonl_map(path: str, key_field: str, val_field: str) -> Dict[str, str]:
@@ -67,25 +75,31 @@ def classify_kjv(text: str) -> str:
     return "none"
 
 
-def cap_all(text: str) -> str:
+def force_cap(text: str) -> str:
     def repl(m: re.Match) -> str:
         return LOW_TO_CAP[m.group(0)]
-    return re.sub(r"\b(he|him|his|himself)\b", repl, text)
+    return LOW_REPLACE_RE.sub(repl, text)
 
 
-def decap_all(text: str) -> str:
+def force_decap(text: str) -> str:
     def repl(m: re.Match) -> str:
         return CAP_TO_LOW[m.group(0)]
-    return re.sub(r"\b(He|Him|His|Himself)\b", repl, text)
+    return CAP_REPLACE_RE.sub(repl, text)
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="KJV-gated pronoun pass (no API).")
-    ap.add_argument("--book_in", required=True, help="Input book JSONL (e.g., output_phase2/exodus.jsonl)")
+    ap = argparse.ArgumentParser(description="KJV pronoun normalization (caps + decaps), no API.")
+    ap.add_argument("--book_in", required=True, help="Input JSONL (e.g., output_phase2/exodus.jsonl)")
     ap.add_argument("--kjv", required=True, help="KJV JSONL (e.g., sources/kjv/kjv.jsonl)")
-    ap.add_argument("--book_out", required=True, help="Output JSONL (fixed)")
-    ap.add_argument("--review_out", required=True, help="Review targets JSONL (mixed verses)")
-    ap.add_argument("--stats_out", required=False, help="Optional stats JSON file")
+    ap.add_argument("--book_out", required=True, help="Output JSONL (normalized)")
+    ap.add_argument("--review_out", required=True, help="Review JSONL")
+    ap.add_argument("--stats_out", required=False, help="Optional stats JSON")
+    ap.add_argument(
+        "--mixed_policy",
+        choices=["skip", "cap_only", "normalize_anyway"],
+        default="skip",
+        help="What to do when KJV has mixed pronouns in the verse.",
+    )
     args = ap.parse_args()
 
     kjv_map = load_jsonl_map(args.kjv, "ref", "kjv")
@@ -97,11 +111,14 @@ def main() -> None:
 
     total = 0
     changed = 0
-    mixed = 0
-    none = 0
     missing_kjv = 0
+
     divine_only = 0
     human_only = 0
+    mixed = 0
+    none = 0
+
+    mixed_changed = 0
 
     with open(args.book_in, "r", encoding="utf-8") as fin, open(args.book_out, "w", encoding="utf-8") as fout:
         for line_no, line in enumerate(fin, start=1):
@@ -109,6 +126,7 @@ def main() -> None:
             if not line:
                 continue
             total += 1
+
             obj = json.loads(line)
             ref = (obj.get("ref") or "").strip()
             text = obj.get("translation", "")
@@ -118,6 +136,7 @@ def main() -> None:
             kjv_text = kjv_map.get(ref)
             if not kjv_text:
                 missing_kjv += 1
+                review.append({"ref": ref, "reason": "missing_kjv_ref"})
                 fout.write(json.dumps({"ref": ref, "translation": text}, ensure_ascii=False) + "\n")
                 continue
 
@@ -126,14 +145,32 @@ def main() -> None:
 
             if cls == "divine_only":
                 divine_only += 1
-                new_text = cap_all(text)
+                new_text = force_cap(text)
+
             elif cls == "human_only":
                 human_only += 1
-                new_text = decap_all(text)
+                new_text = force_decap(text)
+
             elif cls == "mixed":
                 mixed += 1
-                review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv"})
-                new_text = text
+                if args.mixed_policy == "skip":
+                    review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv"})
+                    new_text = text
+                elif args.mixed_policy == "cap_only":
+                    # Only promote lowercase to caps; do not decap anything
+                    new_text = force_cap(text)
+                    if new_text != text:
+                        mixed_changed += 1
+                    review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv_cap_only_applied"})
+                else:  # normalize_anyway
+                    # Apply both: cap lowercase, then decap any remaining caps if KJV has lowercase too.
+                    # This is aggressive and can be wrong if your sentence structure differs.
+                    tmp = force_cap(text)
+                    new_text = force_decap(tmp)
+                    if new_text != text:
+                        mixed_changed += 1
+                    review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv_normalize_anyway_applied"})
+
             else:
                 none += 1
                 new_text = text
@@ -142,10 +179,6 @@ def main() -> None:
                 changed += 1
 
             fout.write(json.dumps({"ref": ref, "translation": new_text}, ensure_ascii=False) + "\n")
-
-    with open(args.review_out, "w", encoding="utf-8") as f:
-        for t in review:
-            f.write(json.dumps(t, ensure_ascii=False) + "\n")
 
     stats = {
         "total": total,
@@ -157,6 +190,8 @@ def main() -> None:
             "mixed": mixed,
             "none": none,
         },
+        "mixed_policy": args.mixed_policy,
+        "mixed_changed": mixed_changed,
         "review_targets": len(review),
     }
 
@@ -165,7 +200,11 @@ def main() -> None:
         with open(args.stats_out, "w", encoding="utf-8") as f:
             json.dump(stats, f, ensure_ascii=False, indent=2)
 
-    print("Pronoun pass complete:")
+    with open(args.review_out, "w", encoding="utf-8") as f:
+        for item in review:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+    print("KJV pronoun normalization complete:")
     print(json.dumps(stats, indent=2))
 
 
