@@ -1,4 +1,4 @@
-name: Build KJV JSONL
+name: Build KJV JSONL (Public Domain)
 
 on:
   workflow_dispatch:
@@ -8,30 +8,121 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Fetch KJV OSIS (public domain)
+      - name: Fetch KJV OSIS XML
         run: |
+          set -euo pipefail
           mkdir -p sources/kjv
           curl -L \
             https://raw.githubusercontent.com/seven1m/open-bibles/master/eng-kjv.osis.xml \
             -o sources/kjv/eng-kjv.osis.xml
+          echo "Downloaded OSIS:"
+          wc -c sources/kjv/eng-kjv.osis.xml
 
-      - name: Convert OSIS to JSONL
+      - name: Build sources/kjv/kjv.jsonl
         run: |
-          python scripts/osis_to_kjv_jsonl.py \
-            sources/kjv/eng-kjv.osis.xml \
-            sources/kjv/kjv.jsonl
+          set -euo pipefail
 
-      - name: Commit KJV JSONL
+          cat > osis_to_kjv_jsonl.py << 'PY'
+          #!/usr/bin/env python3
+          import json
+          import re
+          import xml.etree.ElementTree as ET
+
+          BOOK_MAP = {
+              "Gen":"GEN","Exod":"EXOD","Lev":"LEV","Num":"NUM","Deut":"DEUT",
+              "Josh":"JOSH","Judg":"JUDG","Ruth":"RUTH","1Sam":"1SAM","2Sam":"2SAM",
+              "1Kgs":"1KGS","2Kgs":"2KGS","1Chr":"1CHR","2Chr":"2CHR","Ezra":"EZRA",
+              "Neh":"NEH","Esth":"ESTH","Job":"JOB","Ps":"PSA","Prov":"PROV",
+              "Eccl":"ECCL","Song":"SNG","Isa":"ISA","Jer":"JER","Lam":"LAM",
+              "Ezek":"EZEK","Dan":"DAN","Hos":"HOS","Joel":"JOEL","Amos":"AMOS",
+              "Obad":"OBAD","Jonah":"JONAH","Mic":"MIC","Nah":"NAH","Hab":"HAB",
+              "Zeph":"ZEPH","Hag":"HAG","Zech":"ZECH","Mal":"MAL",
+              "Matt":"MATT","Mark":"MARK","Luke":"LUKE","John":"JOHN","Acts":"ACTS",
+              "Rom":"ROM","1Cor":"1COR","2Cor":"2COR","Gal":"GAL","Eph":"EPH",
+              "Phil":"PHIL","Col":"COL","1Thess":"1THESS","2Thess":"2THESS",
+              "1Tim":"1TIM","2Tim":"2TIM","Titus":"TITUS","Phlm":"PHLM","Heb":"HEB",
+              "Jas":"JAS","1Pet":"1PET","2Pet":"2PET","1John":"1JOHN",
+              "2John":"2JOHN","3John":"3JOHN","Jude":"JUDE","Rev":"REV"
+          }
+
+          def strip_ns(tag: str) -> str:
+              return tag.split("}", 1)[-1] if "}" in tag else tag
+
+          def osis_to_ref(osis_id: str):
+              # ex: Gen.1.1
+              m = re.match(r"^([1-3]?[A-Za-z]+)\.(\d+)\.(\d+)$", osis_id or "")
+              if not m:
+                  return None
+              book_osis, chap, verse = m.group(1), m.group(2), m.group(3)
+              book_code = BOOK_MAP.get(book_osis)
+              if not book_code:
+                  return None
+              return f"{book_code} {int(chap)}:{int(verse)}"
+
+          def normalize_text(s: str) -> str:
+              return re.sub(r"\s+", " ", s).strip()
+
+          tree = ET.parse("sources/kjv/eng-kjv.osis.xml")
+          root = tree.getroot()
+
+          out_path = "sources/kjv/kjv.jsonl"
+          out_count = 0
+
+          with open(out_path, "w", encoding="utf-8") as fout:
+              for elem in root.iter():
+                  if strip_ns(elem.tag) != "verse":
+                      continue
+
+                  ref = osis_to_ref(elem.attrib.get("osisID", "").strip())
+                  if not ref:
+                      continue
+
+                  # Collect text inside verse, skipping <note> elements.
+                  parts = []
+                  if elem.text:
+                      parts.append(elem.text)
+                  for child in elem:
+                      if strip_ns(child.tag) == "note":
+                          # Skip notes entirely
+                          if child.tail:
+                              parts.append(child.tail)
+                          continue
+                      if child.text:
+                          parts.append(child.text)
+                      if child.tail:
+                          parts.append(child.tail)
+
+                  verse_text = normalize_text("".join(parts))
+                  if not verse_text:
+                      continue
+
+                  fout.write(json.dumps({"ref": ref, "kjv": verse_text}, ensure_ascii=False) + "\n")
+                  out_count += 1
+
+          print(f"Wrote {out_count} verses to {out_path}")
+          PY
+
+          python osis_to_kjv_jsonl.py
+
+          echo "KJV JSONL stats:"
+          wc -l sources/kjv/kjv.jsonl
+          head -n 3 sources/kjv/kjv.jsonl
+
+      - name: Commit KJV sources to repository
         run: |
+          set -euo pipefail
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add sources/kjv
-          git commit -m "Add public-domain KJV JSONL source" || exit 0
+
+          git add sources/kjv/eng-kjv.osis.xml sources/kjv/kjv.jsonl
+
+          git commit -m "Add public-domain KJV OSIS + kjv.jsonl" || exit 0
           git push
