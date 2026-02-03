@@ -174,6 +174,27 @@ def enforce_compound_numbers(text: str) -> str:
         flags=re.IGNORECASE,
     )
     return text
+    
+HUMAN_SUBJECTS_RE = re.compile(
+    r"\b(Moses|Aaron|Pharaoh|Joshua|Bezalel|Oholiab|Israel|the people|the man|the woman)\b"
+)
+
+DIVINE_MARKERS_RE = re.compile(r"\b(God|the LORD|LORD|Yahweh|Lord GOD)\b")
+
+def enforce_pronoun_false_positive_killers(text: str) -> str:
+    """
+    Remove known false positives where pronouns refer to humans even though the verse contains LORD/God.
+    This should run BEFORE reverential capitalization.
+    """
+
+    # Common narrative formula: "the LORD commanded him; so he did"
+    text = re.sub(r"\b(the LORD|LORD|Yahweh)\s+commanded\s+Him\b", r"\1 commanded him", text)
+    text = re.sub(r"\b(the LORD|LORD|Yahweh)\s+had\s+commanded\s+Him\b", r"\1 had commanded him", text)
+
+    # If we now have "...commanded him; so He did" -> force "so he did"
+    text = re.sub(r"\b(commanded\s+him;)\s+so\s+He\s+did\b", r"\1 so he did", text)
+
+    return text
 
 
 # --- Improved pronoun heuristic (conservative) ---
