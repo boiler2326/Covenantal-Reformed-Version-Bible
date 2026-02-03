@@ -1,4 +1,4 @@
-name: Pronoun pass (KJV-gated, no API)
+name: Pronoun normalization (KJV)
 
 on:
   workflow_dispatch:
@@ -8,9 +8,17 @@ on:
         required: true
         default: "exodus"
       in_folder:
-        description: "Folder containing the book jsonl (output or output_phase2)"
+        description: "Input folder (e.g., output_phase2 or output_manual)"
         required: true
         default: "output_phase2"
+      out_folder:
+        description: "Output folder (e.g., output_final)"
+        required: true
+        default: "output_final"
+      mixed_policy:
+        description: "How to handle KJV mixed-pronoun verses: skip, cap_only, normalize_anyway"
+        required: true
+        default: "skip"
 
 jobs:
   pronouns:
@@ -31,24 +39,33 @@ jobs:
           test -f scripts/kjv_pronouns.py
           test -f ${{ github.event.inputs.in_folder }}/${{ github.event.inputs.book }}.jsonl
 
-      - name: Run KJV-gated pronoun pass
+      - name: Run KJV pronoun normalization (caps + decaps)
         run: |
           set -euo pipefail
-          mkdir -p output_pronouns phase2 reports
+          mkdir -p "${{ github.event.inputs.out_folder }}" phase2 reports
           python scripts/kjv_pronouns.py \
-            --book_in ${{ github.event.inputs.in_folder }}/${{ github.event.inputs.book }}.jsonl \
-            --kjv sources/kjv/kjv.jsonl \
-            --book_out output_pronouns/${{ github.event.inputs.book }}.jsonl \
-            --review_out phase2/pronoun_review_targets_${{ github.event.inputs.book }}.jsonl \
-            --stats_out reports/pronoun_stats_${{ github.event.inputs.book }}.json
+            --book_in "${{ github.event.inputs.in_folder }}/${{ github.event.inputs.book }}.jsonl" \
+            --kjv "sources/kjv/kjv.jsonl" \
+            --book_out "${{ github.event.inputs.out_folder }}/${{ github.event.inputs.book }}.jsonl" \
+            --review_out "phase2/pronoun_review_${{ github.event.inputs.book }}.jsonl" \
+            --stats_out "reports/pronoun_stats_${{ github.event.inputs.book }}.json" \
+            --mixed_policy "${{ github.event.inputs.mixed_policy }}"
 
       - name: Commit outputs
         run: |
           set -euo pipefail
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add output_pronouns/${{ github.event.inputs.book }}.jsonl \
-                  phase2/pronoun_review_targets_${{ github.event.inputs.book }}.jsonl \
-                  reports/pronoun_stats_${{ github.event.inputs.book }}.json
-          git commit -m "KJV-gated pronoun pass: ${{ github.event.inputs.book }}" || exit 0
+
+          git add "${{ github.event.inputs.out_folder }}/${{ github.event.inputs.book }}.jsonl" \
+                  "phase2/pronoun_review_${{ github.event.inputs.book }}.jsonl" \
+                  "reports/pronoun_stats_${{ github.event.inputs.book }}.json"
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "KJV pronoun normalization: ${{ github.event.inputs.book }} (mixed=${{ github.event.inputs.mixed_policy }})"
+          git pull --rebase origin main
           git push
