@@ -4,9 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       book:
-        description: "Book filename to polish (e.g., genesis)"
+        description: "Book filename to polish (e.g., genesis, exodus)"
         required: true
         default: "genesis"
+      mode:
+        description: "Run mode: enforce_only (no API) or targets (model on targets + enforce)"
+        required: true
+        default: "enforce_only"
+      in_folder:
+        description: "Folder containing the input book JSONL (usually output)"
+        required: true
+        default: "output"
 
 jobs:
   polish:
@@ -28,22 +36,57 @@ jobs:
 
       - name: Verify inputs exist
         run: |
-          test -f output/${{ github.event.inputs.book }}.jsonl
+          set -euo pipefail
+          test -f ${{ github.event.inputs.in_folder }}/${{ github.event.inputs.book }}.jsonl
           test -f phase2/targets.jsonl
           test -f charter/phase2_charter.txt
           test -f scripts/polish.py
 
-      - name: Run Phase 2 polish
+      - name: Run Phase 2 polish (enforce only)
+        if: ${{ github.event.inputs.mode == 'enforce_only' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
+          set -euo pipefail
           mkdir -p output_phase2
-          python scripts/polish.py --in output/${{ github.event.inputs.book }}.jsonl --targets phase2/targets.jsonl --charter charter/phase2_charter.txt --out output_phase2/${{ github.event.inputs.book }}.jsonl --enforce
+          python scripts/polish.py \
+            --in ${{ github.event.inputs.in_folder }}/${{ github.event.inputs.book }}.jsonl \
+            --targets phase2/targets.jsonl \
+            --charter charter/phase2_charter.txt \
+            --out output_phase2/${{ github.event.inputs.book }}.jsonl \
+            --enforce \
+            --enforce_only
+
+      - name: Run Phase 2 polish (targets + enforce)
+        if: ${{ github.event.inputs.mode == 'targets' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p output_phase2
+          python scripts/polish.py \
+            --in ${{ github.event.inputs.in_folder }}/${{ github.event.inputs.book }}.jsonl \
+            --targets phase2/targets.jsonl \
+            --charter charter/phase2_charter.txt \
+            --out output_phase2/${{ github.event.inputs.book }}.jsonl \
+            --enforce
 
       - name: Commit polished output
         run: |
+          set -euo pipefail
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+
           git add output_phase2/${{ github.event.inputs.book }}.jsonl
-          git commit -m "Phase 2 polish: ${{ github.event.inputs.book }}" || echo "No changes to commit"
+
+          # Commit only if there are staged changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "Phase 2 polish: ${{ github.event.inputs.book }} (${{ github.event.inputs.mode }})"
+
+          # Avoid non-fast-forward failures
+          git pull --rebase origin main
           git push
