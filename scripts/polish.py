@@ -16,9 +16,9 @@ Deterministic enforcement includes:
 - LORD caps normalization
 - between/from cleanup
 - compound number hyphenation
-- improved reverential pronouns (antecedent-aware, conservative)
+- improved reverential pronouns (antecedent-window + human-subject blockers, conservative)
 - explicit false-positive killers ("commanded him; so he did", etc.)
-- optional craftsman-run lowercase ("And he made...") when appropriate
+- craftsman-run opening normalization ("And he made...") to prevent accidental divine caps and improve cadence
 
 Design principle:
 - Prefer missing a legitimate divine pronoun cap over incorrectly capitalizing a human pronoun.
@@ -30,7 +30,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Set, Tuple
 
 from openai import OpenAI
 
@@ -115,14 +115,14 @@ def similarity_guard(original: str, revised: str) -> Tuple[bool, str]:
 # ----------------------------
 
 DIVINE_MARKERS_RE = re.compile(r"\b(God|the LORD|LORD|Yahweh|Lord GOD|LORD God)\b")
+DIVINE_SPEECH_MARKERS_RE = re.compile(
+    r"\b(And the LORD said|And the LORD spoke|Thus says the LORD|says the LORD|God said|the LORD said|the LORD spoke)\b"
+)
+
 # Names/subjects that frequently appear where pronouns should remain lowercase.
 # Keep limited & conservative; you can add more as needed.
 HUMAN_SUBJECTS_RE = re.compile(
     r"\b(Moses|Aaron|Pharaoh|Joshua|Bezalel|Oholiab|Miriam|Hur|Jethro|Israel|the people|the man|the woman)\b"
-)
-
-DIVINE_SPEECH_MARKERS_RE = re.compile(
-    r"\b(And the LORD said|And the LORD spoke|Thus says the LORD|says the LORD|God said|the LORD said|the LORD spoke)\b"
 )
 
 # Possession nouns that are very likely divine when paired with "His"
@@ -225,28 +225,59 @@ def enforce_compound_numbers(text: str) -> str:
 def enforce_pronoun_false_positive_killers(text: str) -> str:
     """
     Kill known recurring false positives before any reverential capitalization.
-    These are "almost always human" when they appear.
+    These are almost always human (Moses, Aaron, Israel, etc.).
     """
-    # Narrative formula: the LORD commanded him (object is a human)
-    text = re.sub(r"\b(the LORD|LORD|Yahweh)\s+commanded\s+Him\b", r"\1 commanded him", text)
-    text = re.sub(r"\b(the LORD|LORD|Yahweh)\s+had\s+commanded\s+Him\b", r"\1 had commanded him", text)
 
-    # If we have "... commanded him; so He did" -> force lowercase
-    text = re.sub(r"\b(commanded\s+him;)\s+so\s+He\s+did\b", r"\1 so he did", text)
+    # Normalize "the LORD commanded Him" (object is human)
+    text = re.sub(
+        r"\b(the LORD|LORD|Yahweh)\s+commanded\s+Him\b",
+        r"\1 commanded him",
+        text,
+    )
+    text = re.sub(
+        r"\b(the LORD|LORD|Yahweh)\s+had\s+commanded\s+Him\b",
+        r"\1 had commanded him",
+        text,
+    )
+
+    # Also catch lowercase object but uppercase obedience clause:
+    # "... commanded him; so He did" -> "... commanded him; so he did"
+    text = re.sub(
+        r"\b(commanded\s+him;)\s+so\s+He\s+did\b",
+        r"\1 so he did",
+        text,
+    )
+
+    # Catch the fully-capped version in one shot:
+    # "... commanded Him; so He did" -> "... commanded him; so he did"
+    text = re.sub(
+        r"\b(commanded)\s+Him;\s+so\s+He\s+did\b",
+        r"\1 him; so he did",
+        text,
+    )
+
+    # "And the LORD said to Me" is not divine first-person; it's a human being addressed
+    text = re.sub(
+        r"\b(the LORD|LORD|Yahweh)\s+said\s+to\s+Me\b",
+        r"\1 said to me",
+        text,
+    )
 
     return text
 
 
 def enforce_craftsman_opening_lowercase(text: str) -> str:
     """
-    Prevent accidental divine caps in long "he made / he fashioned / he joined" runs.
-    If a verse starts with "He made/He joined/He fashioned/He made..." and there is no divine marker,
-    prefer "And he ..." for cadence and to avoid reverential false positives.
+    In tabernacle-building sections we often get verse-initial "He made..." referring to a craftsman.
+    If the verse starts with these patterns, force "And he ..." for cadence + correctness.
     """
-    if text.startswith(("He made", "He joined", "He fashioned", "He overlaid", "He set")):
-        if not DIVINE_MARKERS_RE.search(text):
-            # Insert "And " and lowercase the initial He
-            return "And he" + text[len("He"):]
+    starters = (
+        "He made", "He joined", "He fashioned", "He overlaid", "He set",
+        "He cast", "He hammered", "He carved", "He beat", "He formed",
+        "He prepared", "He placed", "He put", "He built", "He erected",
+    )
+    if text.startswith(starters):
+        return "And he" + text[len("He"):]
     return text
 
 
@@ -256,29 +287,35 @@ def enforce_reverential_pronouns(text: str) -> str:
 
     Strategy:
     - Only consider caps if the verse contains a divine marker (God/the LORD/LORD/etc.).
-    - For each pronoun, look left within a short window.
+    - For each pronoun, look left within a short window:
         - Require a divine marker in that left-window.
         - If a human subject appears after the last divine marker in that window, do NOT capitalize.
-    - Special-case:
-        - Do not capitalize object pronouns in "said to him / called to him" patterns (usually human).
-        - "his X" only caps if X is a whitelisted divine possession and antecedent is divine.
-
-    Also:
-    - First-person My/Me/Mine only caps when a divine speech marker is present.
+    - Avoid "said to him / called to him / appeared to him" object patterns (usually human).
+    - "his X" only caps if X is a whitelisted divine possession AND antecedent is divine.
+    - First-person My/Me/Mine only caps when a divine speech marker is present, and only inside quotes if possible.
     """
     if not DIVINE_MARKERS_RE.search(text):
         return text
 
-    # First-person caps only within divine speech
+    # First-person caps: only if divine speech marker is present
     if DIVINE_SPEECH_MARKERS_RE.search(text):
-        # Avoid turning "my" into "My" inside quotes belonging to humans (rare in Torah narrative),
-        # but this is still conservative: only do direct word-boundary replacements.
-        text = re.sub(r"\bmy\b", "My", text)
-        text = re.sub(r"\bme\b", "Me", text)
-        text = re.sub(r"\bmine\b", "Mine", text)
-        text = re.sub(r"\bmyself\b", "Myself", text)
+        # Prefer only within quotes, if quotes exist in the verse
+        if "“" in text and "”" in text:
+            def cap_first_person_in_quotes(m: re.Match) -> str:
+                seg = m.group(0)
+                seg = re.sub(r"\bmy\b", "My", seg)
+                seg = re.sub(r"\bme\b", "Me", seg)
+                seg = re.sub(r"\bmine\b", "Mine", seg)
+                seg = re.sub(r"\bmyself\b", "Myself", seg)
+                return seg
+            text = re.sub(r"“[^”]*”", cap_first_person_in_quotes, text)
+        else:
+            # fallback: apply globally (rarely dangerous in Torah narrative)
+            text = re.sub(r"\bmy\b", "My", text)
+            text = re.sub(r"\bme\b", "Me", text)
+            text = re.sub(r"\bmine\b", "Mine", text)
+            text = re.sub(r"\bmyself\b", "Myself", text)
 
-    # Helper to decide capitalization of third-person pronouns
     def should_cap(pron_match: re.Match) -> bool:
         pron = pron_match.group(0)  # lower pronoun from regex below
         start = pron_match.start()
@@ -298,21 +335,16 @@ def enforce_reverential_pronouns(text: str) -> str:
         if HUMAN_SUBJECTS_RE.search(tail):
             return False
 
-        # Avoid "said to him / called to him" class: object pronouns are typically humans
-        # We'll check the immediate few words before the pronoun in the raw left string.
-        # If it ends with "to " / "from " / "with " etc, and an address-verb appears nearby, skip.
-        # This catches: "called to him", "said to him", "appeared to him"
-        prev_words = re.findall(r"[A-Za-z']+", left.lower())[-6:]
+        # Avoid object pronouns in "said/called/appeared ... to him" constructions (usually human)
+        prev_words = re.findall(r"[A-Za-z']+", left.lower())[-7:]
         if pron in ("him", "himself") and prev_words:
             if prev_words[-1] in PREP_OBJECT_BAN:
-                # look for an address verb in the previous few words
                 if any(w in ADDRESS_VERBS for w in prev_words[:-1]):
                     return False
 
         # Possessive "his": only cap if next noun is a divine possession
         if pron == "his":
-            # Peek right a bit for the next word
-            right = text[pron_match.end(): pron_match.end() + 40]
+            right = text[pron_match.end(): pron_match.end() + 50]
             next_words = re.findall(r"[A-Za-z']+", right)
             if not next_words:
                 return False
@@ -322,7 +354,6 @@ def enforce_reverential_pronouns(text: str) -> str:
 
         return True
 
-    # Replace only lower-case pronouns, leaving already-capped ones alone
     def repl(m: re.Match) -> str:
         pron = m.group(0)
         if not should_cap(m):
@@ -330,6 +361,7 @@ def enforce_reverential_pronouns(text: str) -> str:
         mapping = {"he": "He", "him": "Him", "his": "His", "himself": "Himself"}
         return mapping.get(pron, pron)
 
+    # Only capitalize lower-case pronouns; leave already-capped ones unchanged
     return re.sub(r"\b(he|him|his|himself)\b", repl, text)
 
 
@@ -347,7 +379,7 @@ def apply_enforcement(text: str) -> str:
     # Kill known false positives before pronoun caps
     text = enforce_pronoun_false_positive_killers(text)
 
-    # Craftsman-run lowercasing (optional but safe)
+    # Craftsman-run opening normalization (safe + improves cadence)
     text = enforce_craftsman_opening_lowercase(text)
 
     # Now apply reverential caps conservatively
@@ -418,7 +450,7 @@ def main() -> None:
 
             out_text = original
 
-            # If ref is in targets, run LLM polish
+            # LLM polish only if in targets
             if ref in targets:
                 user_prompt = (
                     f"REFERENCE: {ref}\n"
@@ -441,7 +473,6 @@ def main() -> None:
                 revised = (response.output_text or "").strip()
                 llm_used += 1
 
-                # Apply enforcement to LLM output if enabled
                 if args.enforce:
                     before = revised
                     revised = apply_enforcement(revised)
@@ -459,9 +490,7 @@ def main() -> None:
                     out_text = revised
                     if normalize_space(out_text) != normalize_space(original):
                         changed += 1
-
             else:
-                # Not in targets: just apply enforcement if enabled
                 if args.enforce:
                     before = out_text
                     out_text = apply_enforcement(out_text)
