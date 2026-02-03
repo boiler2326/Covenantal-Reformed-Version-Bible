@@ -8,5 +8,7 @@
     "mixed": 0,
     "none": 0
   },
-  "review_targets": 0
+  "mixed_policy": "skip",
+  "mixed_changed": 0,
+  "review_targets": 1213
 }
