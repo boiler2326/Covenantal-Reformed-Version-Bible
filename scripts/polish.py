@@ -1,13 +1,27 @@
 #!/usr/bin/env python3
 """
-Phase-2 polish pass:
-- Uses an LLM (optional, targeted by refs in targets.jsonl) to revise English for cadence/beauty
-- Optionally applies deterministic enforcement rules (LORD caps, between/from cleanup, numbers, reverential pronouns)
+Phase-2 polish pass
 
-Key design goals:
-- Book-agnostic: works for any book JSONL in the same {ref, translation} format
-- Safe defaults: enforcement is conservative to avoid mis-capitalizing human pronouns (e.g., Moses/Pharaoh in Exodus)
-- Deterministic enforcement runs on ALL verses when --enforce is set (targets or not)
+Inputs:
+- Phase-1 JSONL: lines of {"ref":"EXOD 1:1","translation":"..."}
+- targets.jsonl: lines of {"ref":"EXOD 3:14"} indicating which verses should get LLM "beauty polish"
+- phase2_charter.txt: your Phase-2 charter
+
+Behavior:
+- If ref is in targets -> call LLM to revise for cadence/beauty; meaning must remain unchanged.
+- If ref is NOT in targets -> pass through unchanged.
+- If --enforce is set -> apply deterministic enforcement to ALL verses (targets or not).
+
+Deterministic enforcement includes:
+- LORD caps normalization
+- between/from cleanup
+- compound number hyphenation
+- improved reverential pronouns (antecedent-aware, conservative)
+- explicit false-positive killers ("commanded him; so he did", etc.)
+- optional craftsman-run lowercase ("And he made...") when appropriate
+
+Design principle:
+- Prefer missing a legitimate divine pronoun cap over incorrectly capitalizing a human pronoun.
 """
 
 import argparse
@@ -16,7 +30,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, Optional
 
 from openai import OpenAI
 
@@ -100,6 +114,36 @@ def similarity_guard(original: str, revised: str) -> Tuple[bool, str]:
 # Deterministic enforcement
 # ----------------------------
 
+DIVINE_MARKERS_RE = re.compile(r"\b(God|the LORD|LORD|Yahweh|Lord GOD|LORD God)\b")
+# Names/subjects that frequently appear where pronouns should remain lowercase.
+# Keep limited & conservative; you can add more as needed.
+HUMAN_SUBJECTS_RE = re.compile(
+    r"\b(Moses|Aaron|Pharaoh|Joshua|Bezalel|Oholiab|Miriam|Hur|Jethro|Israel|the people|the man|the woman)\b"
+)
+
+DIVINE_SPEECH_MARKERS_RE = re.compile(
+    r"\b(And the LORD said|And the LORD spoke|Thus says the LORD|says the LORD|God said|the LORD said|the LORD spoke)\b"
+)
+
+# Possession nouns that are very likely divine when paired with "His"
+DIVINE_POSSESSIONS = {
+    "name", "glory", "covenant", "statutes", "commandments", "word", "words",
+    "law", "ways", "hand", "hands", "face", "presence", "spirit", "mercy",
+    "wrath", "anger", "voice", "mouth", "holiness", "power", "love", "charity",
+}
+
+ADDRESS_VERBS = {
+    "said", "spoke", "called", "cried", "appeared", "showed", "commanded",
+    "charged", "sent", "told", "revealed", "gave", "brought", "spared",
+}
+
+PREP_OBJECT_BAN = {
+    "to", "from", "with", "by", "for", "at", "in", "on", "upon", "before",
+    "after", "against", "toward", "towards", "into", "unto", "over", "under",
+    "behind", "beside", "among", "between", "within", "without", "near",
+}
+
+
 def enforce_between_from(text: str) -> str:
     # "separated between X and Y" -> "separated X from Y"
     text = re.sub(r"\bseparated between\b", "separated", text, flags=re.IGNORECASE)
@@ -139,8 +183,10 @@ def enforce_lord_caps(text: str) -> str:
     - Maintain "Lord GOD" (Adonai YHWH style)
     - Normalize "the Lord" -> "the LORD" (YHWH)
     - Normalize "And the Lord said/spoke" -> "And the LORD said/spoke"
+    - Normalize "angel of the Lord" -> "angel of the LORD"
+    - Normalize "Lord God" -> "LORD God" (YHWH Elohim pattern)
     """
-    # Keep "Lord GOD" as-is (do not turn into LORD GOD)
+    # Keep "Lord GOD" as-is
     text = re.sub(r"\bthe Lord GOD\b", "the Lord GOD", text)
 
     # Common narrative formulas
@@ -153,7 +199,7 @@ def enforce_lord_caps(text: str) -> str:
     # Keep "angel of the LORD" consistent
     text = re.sub(r"\bangel of the Lord\b", "angel of the LORD", text)
 
-    # Normalize "Lord God" -> "LORD God" (YHWH Elohim pattern)
+    # Normalize "Lord God" -> "LORD God"
     text = re.sub(r"\bLord God\b", "LORD God", text)
 
     return text
@@ -174,248 +220,117 @@ def enforce_compound_numbers(text: str) -> str:
         flags=re.IGNORECASE,
     )
     return text
-    
-HUMAN_SUBJECTS_RE = re.compile(
-    r"\b(Moses|Aaron|Pharaoh|Joshua|Bezalel|Oholiab|Israel|the people|the man|the woman)\b"
-)
 
-DIVINE_MARKERS_RE = re.compile(r"\b(God|the LORD|LORD|Yahweh|Lord GOD)\b")
 
 def enforce_pronoun_false_positive_killers(text: str) -> str:
     """
-    Remove known false positives where pronouns refer to humans even though the verse contains LORD/God.
-    This should run BEFORE reverential capitalization.
+    Kill known recurring false positives before any reverential capitalization.
+    These are "almost always human" when they appear.
     """
-
-    # Common narrative formula: "the LORD commanded him; so he did"
+    # Narrative formula: the LORD commanded him (object is a human)
     text = re.sub(r"\b(the LORD|LORD|Yahweh)\s+commanded\s+Him\b", r"\1 commanded him", text)
     text = re.sub(r"\b(the LORD|LORD|Yahweh)\s+had\s+commanded\s+Him\b", r"\1 had commanded him", text)
 
-    # If we now have "...commanded him; so He did" -> force "so he did"
+    # If we have "... commanded him; so He did" -> force lowercase
     text = re.sub(r"\b(commanded\s+him;)\s+so\s+He\s+did\b", r"\1 so he did", text)
 
     return text
 
 
-# --- Improved pronoun heuristic (conservative) ---
-
-_PREP_OBJECT_BAN = {
-    "to", "from", "with", "by", "for", "at", "in", "on", "upon", "before",
-    "after", "against", "toward", "towards", "into", "unto", "over", "under",
-    "behind", "beside", "among", "between", "within", "without", "near"
-}
-
-# Verbs commonly used when God addresses humans; the object pronoun should remain lowercase:
-_ADDRESS_VERBS = {
-    "said", "spoke", "called", "cried", "appeared", "showed", "commanded",
-    "charged", "sent", "told", "revealed", "made", "gave", "brought"
-}
-
-# Human names that frequently appear in Exodus narrative where mis-capitalization is harmful.
-# (This list is intentionally limited; it is a "do-no-harm" list.)
-_HUMAN_HINTS = {
-    "Moses", "Aaron", "Pharaoh", "Israel", "Egypt", "Midian", "Jethro",
-    "Joshua", "Miriam", "Hur"
-}
-
-# Possessions/attributes very likely divine when paired with "His" in a verse that clearly refers to God.
-# This is a whitelist to avoid "His heart" (often Pharaoh) and similar errors.
-_DIVINE_POSSESSIONS = {
-    "name", "glory", "covenant", "statutes", "commandments", "word", "words",
-    "law", "ways", "hand", "hands", "face", "presence", "spirit", "mercy",
-    "wrath", "anger", "voice", "mouth", "throne", "kingdom", "holiness", "power",
-    "love", "charity"
-}
-
-# Patterns that strongly indicate divine first-person speech in the same verse.
-_DIVINE_SPEECH_MARKERS = [
-    r"\bAnd the LORD said\b",
-    r"\bAnd the LORD spoke\b",
-    r"\bThus says the LORD\b",
-    r"\bsays the LORD\b",
-    r"\bGod said\b",
-    r"\bthe LORD said\b",
-    r"\bthe LORD spoke\b",
-]
-
-
-_WORD_RE = re.compile(r"[A-Za-z']+|[0-9]+|[^\w\s]", re.UNICODE)
-
-
-def _tokenize(text: str) -> List[str]:
-    return _WORD_RE.findall(text)
-
-
-def _is_divine_context(text: str) -> bool:
-    # Explicit divine names in the verse
-    if re.search(r"\b(the LORD|LORD God|Lord GOD|God)\b", text):
-        return True
-    return False
-
-
-def _has_divine_speech_marker(text: str) -> bool:
-    for pat in _DIVINE_SPEECH_MARKERS:
-        if re.search(pat, text):
-            return True
-    return False
-
-
-def _nearest_antecedent_is_divine(tokens: List[str], idx: int, window: int = 12) -> bool:
+def enforce_craftsman_opening_lowercase(text: str) -> str:
     """
-    Decide antecedent directionally by scanning backward a short window.
-    Conservative: if we see a human hint AFTER the nearest divine hint, we assume human.
+    Prevent accidental divine caps in long "he made / he fashioned / he joined" runs.
+    If a verse starts with "He made/He joined/He fashioned/He made..." and there is no divine marker,
+    prefer "And he ..." for cadence and to avoid reverential false positives.
     """
-    start = max(0, idx - window)
-    back = tokens[start:idx]
-
-    # Track nearest divine mention index and nearest human mention index within the window
-    nearest_divine = -1
-    nearest_human = -1
-
-    for j, tok in enumerate(back):
-        # normalize apostrophes? not needed
-        if tok in _HUMAN_HINTS:
-            nearest_human = j
-        if tok in ("God", "LORD", "GOD") or (tok == "LORD" and j >= 1):
-            nearest_divine = j
-        # also catch "the LORD" as two tokens: "the", "LORD"
-        if tok == "LORD":
-            nearest_divine = j
-
-    # If there's a human mention closer than the nearest divine mention, avoid capitalization
-    if nearest_human != -1 and (nearest_divine == -1 or nearest_human > nearest_divine):
-        return False
-
-    return nearest_divine != -1
+    if text.startswith(("He made", "He joined", "He fashioned", "He overlaid", "He set")):
+        if not DIVINE_MARKERS_RE.search(text):
+            # Insert "And " and lowercase the initial He
+            return "And he" + text[len("He"):]
+    return text
 
 
 def enforce_reverential_pronouns(text: str) -> str:
     """
-    Improved, conservative reverential pronoun capitalization.
+    Conservative reverential pronoun capitalization.
 
-    Goals:
-    - Capitalize He/Him/His/Himself only when antecedent is clearly God/LORD in the same verse/clause.
-    - Avoid false positives when God is speaking to/appearing to a human (e.g., "called to him").
-    - Add optional first-person caps (My/Me/Mine/Myself) ONLY when a divine speech marker is present.
+    Strategy:
+    - Only consider caps if the verse contains a divine marker (God/the LORD/LORD/etc.).
+    - For each pronoun, look left within a short window.
+        - Require a divine marker in that left-window.
+        - If a human subject appears after the last divine marker in that window, do NOT capitalize.
+    - Special-case:
+        - Do not capitalize object pronouns in "said to him / called to him" patterns (usually human).
+        - "his X" only caps if X is a whitelisted divine possession and antecedent is divine.
 
-    This is intentionally conservative: it will miss some legitimate divine pronouns rather than mis-capitalizing humans.
+    Also:
+    - First-person My/Me/Mine only caps when a divine speech marker is present.
     """
-    if not _is_divine_context(text):
+    if not DIVINE_MARKERS_RE.search(text):
         return text
 
-    tokens = _tokenize(text)
-    if not tokens:
-        return text
+    # First-person caps only within divine speech
+    if DIVINE_SPEECH_MARKERS_RE.search(text):
+        # Avoid turning "my" into "My" inside quotes belonging to humans (rare in Torah narrative),
+        # but this is still conservative: only do direct word-boundary replacements.
+        text = re.sub(r"\bmy\b", "My", text)
+        text = re.sub(r"\bme\b", "Me", text)
+        text = re.sub(r"\bmine\b", "Mine", text)
+        text = re.sub(r"\bmyself\b", "Myself", text)
 
-    divine_speech = _has_divine_speech_marker(text)
+    # Helper to decide capitalization of third-person pronouns
+    def should_cap(pron_match: re.Match) -> bool:
+        pron = pron_match.group(0)  # lower pronoun from regex below
+        start = pron_match.start()
 
-    def prev_word(i: int) -> str:
-        # previous alphabetic token lowercased
-        j = i - 1
-        while j >= 0:
-            if re.match(r"[A-Za-z']+$", tokens[j]):
-                return tokens[j].lower()
-            j -= 1
-        return ""
+        # Look back a short window (characters) for antecedent hints
+        window_start = max(0, start - 90)
+        left = text[window_start:start]
 
-    def next_word(i: int) -> str:
-        j = i + 1
-        while j < len(tokens):
-            if re.match(r"[A-Za-z']+$", tokens[j]):
-                return tokens[j].lower()
-            j += 1
-        return ""
+        # Need a divine marker somewhere in the left window
+        m_divs = list(DIVINE_MARKERS_RE.finditer(left))
+        if not m_divs:
+            return False
 
-    def any_address_verb_near(i: int, lookback: int = 4) -> bool:
-        start = max(0, i - lookback)
-        for j in range(start, i):
-            if re.match(r"[A-Za-z']+$", tokens[j]) and tokens[j].lower() in _ADDRESS_VERBS:
-                return True
-        return False
+        # Find the last divine marker and then see if a human subject appears after it
+        last_div_end = m_divs[-1].end()
+        tail = left[last_div_end:]
+        if HUMAN_SUBJECTS_RE.search(tail):
+            return False
 
-    out = tokens[:]
-    for i, tok in enumerate(tokens):
-        low = tok.lower()
+        # Avoid "said to him / called to him" class: object pronouns are typically humans
+        # We'll check the immediate few words before the pronoun in the raw left string.
+        # If it ends with "to " / "from " / "with " etc, and an address-verb appears nearby, skip.
+        # This catches: "called to him", "said to him", "appeared to him"
+        prev_words = re.findall(r"[A-Za-z']+", left.lower())[-6:]
+        if pron in ("him", "himself") and prev_words:
+            if prev_words[-1] in PREP_OBJECT_BAN:
+                # look for an address verb in the previous few words
+                if any(w in ADDRESS_VERBS for w in prev_words[:-1]):
+                    return False
 
-        # First-person divine pronouns: only if divine speech marker present (very conservative)
-        if low in {"my", "me", "mine", "myself"}:
-            if divine_speech:
-                out[i] = tok[:1].upper() + tok[1:] if tok.isalpha() else tok
-            continue
+        # Possessive "his": only cap if next noun is a divine possession
+        if pron == "his":
+            # Peek right a bit for the next word
+            right = text[pron_match.end(): pron_match.end() + 40]
+            next_words = re.findall(r"[A-Za-z']+", right)
+            if not next_words:
+                return False
+            noun = next_words[0].lower()
+            if noun not in DIVINE_POSSESSIONS:
+                return False
 
-        # Third-person pronouns
-        if low not in {"he", "him", "his", "himself"}:
-            continue
+        return True
 
-        # If already capitalized, keep unless clearly human (we won't downcase here to avoid unintended edits)
-        # We'll only *upcase* when confident.
+    # Replace only lower-case pronouns, leaving already-capped ones alone
+    def repl(m: re.Match) -> str:
+        pron = m.group(0)
+        if not should_cap(m):
+            return pron
+        mapping = {"he": "He", "him": "Him", "his": "His", "himself": "Himself"}
+        return mapping.get(pron, pron)
 
-        # Ban common "God addressing human" object patterns: "... said to him", "... called to him", etc.
-        p = prev_word(i)
-        if low in {"him", "himself"} and p in _PREP_OBJECT_BAN:
-            # if preceded by an address verb, almost certainly human object: "said to him"
-            if any_address_verb_near(i, lookback=5):
-                continue
-
-        # Possessive "his": only capitalize if the following noun is a divine possession AND antecedent is divine
-        if low == "his":
-            poss = next_word(i)
-            if poss not in _DIVINE_POSSESSIONS:
-                continue
-            if _nearest_antecedent_is_divine(tokens, i, window=14):
-                out[i] = "His"
-            continue
-
-        # Subject/object pronouns "he/him/himself"
-        if not _nearest_antecedent_is_divine(tokens, i, window=14):
-            continue
-
-        # Additional safety: if a human hint appears very near immediately before pronoun, skip
-        # (helps cases like "... Moses ... he ...")
-        near_start = max(0, i - 6)
-        if any(t in _HUMAN_HINTS for t in tokens[near_start:i]):
-            continue
-
-        # If it's "he" at the start of a clause, still conservative; only capitalize if divine speech marker present
-        if low == "he" and i < 2 and not divine_speech:
-            continue
-
-        # Approve capitalization
-        if low == "he":
-            out[i] = "He"
-        elif low == "him":
-            out[i] = "Him"
-        elif low == "himself":
-            out[i] = "Himself"
-
-    return "".join(_rejoin_tokens(out))
-
-
-def _rejoin_tokens(tokens: List[str]) -> List[str]:
-    """
-    Rejoin tokens with sane spacing:
-    - Space between words
-    - No space before punctuation like ,.;:!?)]
-    - No space after opening punctuation like ([{
-    - Preserve apostrophes inside tokens as they were tokenized
-    """
-    out: List[str] = []
-    for i, tok in enumerate(tokens):
-        if i == 0:
-            out.append(tok)
-            continue
-
-        prev = tokens[i - 1]
-
-        if re.match(r"[^\w\s]", tok):  # punctuation
-            # no leading space before punctuation
-            out.append(tok)
-        elif re.match(r"[^\w\s]", prev) and prev in "([{\u201c\u2018":  # opening punct, quotes
-            out.append(tok)
-        else:
-            out.append(" " + tok)
-
-    return out
+    return re.sub(r"\b(he|him|his|himself)\b", repl, text)
 
 
 def validate_enforcement(text: str) -> None:
@@ -428,7 +343,16 @@ def apply_enforcement(text: str) -> str:
     text = enforce_lord_caps(text)
     text = enforce_between_from(text)
     text = enforce_compound_numbers(text)
+
+    # Kill known false positives before pronoun caps
+    text = enforce_pronoun_false_positive_killers(text)
+
+    # Craftsman-run lowercasing (optional but safe)
+    text = enforce_craftsman_opening_lowercase(text)
+
+    # Now apply reverential caps conservatively
     text = enforce_reverential_pronouns(text)
+
     validate_enforcement(text)
     return text
 
@@ -451,6 +375,11 @@ def main() -> None:
         "--enforce",
         action="store_true",
         help="Apply deterministic Phase-2 enforcement rules to ALL verses",
+    )
+    parser.add_argument(
+        "--debug_enforce",
+        action="store_true",
+        help="Print refs where enforcement changed the verse text",
     )
     args = parser.parse_args()
 
@@ -480,16 +409,16 @@ def main() -> None:
     changed = 0
     blocked = 0
     llm_used = 0
+    enforce_changed = 0
 
     with open(args.out, "w", encoding="utf-8") as fout:
         for row in phase1_rows:
             ref = row["ref"]
             original = row["translation"]
 
-            # Start from the original
             out_text = original
 
-            # If in targets, run LLM polish
+            # If ref is in targets, run LLM polish
             if ref in targets:
                 user_prompt = (
                     f"REFERENCE: {ref}\n"
@@ -514,7 +443,12 @@ def main() -> None:
 
                 # Apply enforcement to LLM output if enabled
                 if args.enforce:
+                    before = revised
                     revised = apply_enforcement(revised)
+                    if normalize_space(before) != normalize_space(revised):
+                        enforce_changed += 1
+                        if args.debug_enforce:
+                            print(f"ENFORCE CHANGED (LLM): {ref}")
 
                 ok, reason = similarity_guard(original, revised)
                 if not ok:
@@ -529,10 +463,12 @@ def main() -> None:
             else:
                 # Not in targets: just apply enforcement if enabled
                 if args.enforce:
-                    enforced = apply_enforcement(out_text)
-                    if normalize_space(enforced) != normalize_space(out_text):
-                        changed += 1
-                    out_text = enforced
+                    before = out_text
+                    out_text = apply_enforcement(out_text)
+                    if normalize_space(before) != normalize_space(out_text):
+                        enforce_changed += 1
+                        if args.debug_enforce:
+                            print(f"ENFORCE CHANGED: {ref}")
 
             fout.write(json.dumps({"ref": ref, "translation": out_text}, ensure_ascii=False) + "\n")
 
@@ -540,7 +476,8 @@ def main() -> None:
                 time.sleep(args.sleep)
 
     print(
-        f"Phase-2 complete. LLM-used: {llm_used} | Changed: {changed} | Guard-blocked: {blocked}"
+        f"Phase-2 complete. LLM-used: {llm_used} | Changed: {changed} | "
+        f"Enforce-changed: {enforce_changed} | Guard-blocked: {blocked}"
     )
 
 
