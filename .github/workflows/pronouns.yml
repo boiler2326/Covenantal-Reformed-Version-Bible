@@ -1,0 +1,54 @@
+name: Pronoun pass (KJV-gated, no API)
+
+on:
+  workflow_dispatch:
+    inputs:
+      book:
+        description: "Book filename (e.g., genesis, exodus)"
+        required: true
+        default: "exodus"
+      in_folder:
+        description: "Folder containing the book jsonl (output or output_phase2)"
+        required: true
+        default: "output_phase2"
+
+jobs:
+  pronouns:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify inputs
+        run: |
+          set -euo pipefail
+          test -f sources/kjv/kjv.jsonl
+          test -f scripts/kjv_pronouns.py
+          test -f ${{ github.event.inputs.in_folder }}/${{ github.event.inputs.book }}.jsonl
+
+      - name: Run KJV-gated pronoun pass
+        run: |
+          set -euo pipefail
+          mkdir -p output_pronouns phase2 reports
+          python scripts/kjv_pronouns.py \
+            --book_in ${{ github.event.inputs.in_folder }}/${{ github.event.inputs.book }}.jsonl \
+            --kjv sources/kjv/kjv.jsonl \
+            --book_out output_pronouns/${{ github.event.inputs.book }}.jsonl \
+            --review_out phase2/pronoun_review_targets_${{ github.event.inputs.book }}.jsonl \
+            --stats_out reports/pronoun_stats_${{ github.event.inputs.book }}.json
+
+      - name: Commit outputs
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add output_pronouns/${{ github.event.inputs.book }}.jsonl \
+                  phase2/pronoun_review_targets_${{ github.event.inputs.book }}.jsonl \
+                  reports/pronoun_stats_${{ github.event.inputs.book }}.json
+          git commit -m "KJV-gated pronoun pass: ${{ github.event.inputs.book }}" || exit 0
+          git push
