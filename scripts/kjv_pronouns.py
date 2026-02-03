@@ -14,26 +14,20 @@ Output:
 - optional stats JSON
 
 Rules (Option 2):
-- If KJV verse contains ONLY divine caps (He/Him/His/Himself) and NO lowercase he/him/his/himself:
-    => force-cap those pronouns in your verse.
-- If KJV verse contains ONLY lowercase he/him/his/himself and NO divine caps:
-    => force-decap those pronouns in your verse.
-- If KJV verse contains BOTH (mixed):
-    => by default: SKIP changes and add to review list.
-- If KJV verse contains neither:
-    => do nothing.
+- divine_only (KJV has He/Him/His/Himself and no lowercase): force-cap in your verse
+- human_only (KJV has he/him/his/himself and no divine caps): force-decap in your verse
+- mixed: default skip + review (recommended)
+- none: do nothing
 
-Notes:
-- We only touch these tokens: he/him/his/himself and He/Him/His/Himself
-- We do NOT change wording, punctuation, spacing, or other capitalization.
+Tokens affected:
+he/him/his/himself <-> He/Him/His/Himself
 """
 
 import argparse
 import json
 import os
 import re
-from typing import Dict, List, Tuple
-
+from typing import Dict, List
 
 DIV_CAP_RE = re.compile(r"\b(He|Him|His|Himself)\b")
 HUM_LOW_RE = re.compile(r"\b(he|him|his|himself)\b")
@@ -89,16 +83,15 @@ def force_decap(text: str) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="KJV pronoun normalization (caps + decaps), no API.")
-    ap.add_argument("--book_in", required=True, help="Input JSONL (e.g., output_phase2/exodus.jsonl)")
-    ap.add_argument("--kjv", required=True, help="KJV JSONL (e.g., sources/kjv/kjv.jsonl)")
-    ap.add_argument("--book_out", required=True, help="Output JSONL (normalized)")
-    ap.add_argument("--review_out", required=True, help="Review JSONL")
-    ap.add_argument("--stats_out", required=False, help="Optional stats JSON")
+    ap.add_argument("--book_in", required=True)
+    ap.add_argument("--kjv", required=True)
+    ap.add_argument("--book_out", required=True)
+    ap.add_argument("--review_out", required=True)
+    ap.add_argument("--stats_out", required=False)
     ap.add_argument(
         "--mixed_policy",
         choices=["skip", "cap_only", "normalize_anyway"],
         default="skip",
-        help="What to do when KJV has mixed pronouns in the verse.",
     )
     args = ap.parse_args()
 
@@ -117,7 +110,6 @@ def main() -> None:
     human_only = 0
     mixed = 0
     none = 0
-
     mixed_changed = 0
 
     with open(args.book_in, "r", encoding="utf-8") as fin, open(args.book_out, "w", encoding="utf-8") as fout:
@@ -126,7 +118,6 @@ def main() -> None:
             if not line:
                 continue
             total += 1
-
             obj = json.loads(line)
             ref = (obj.get("ref") or "").strip()
             text = obj.get("translation", "")
@@ -157,19 +148,16 @@ def main() -> None:
                     review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv"})
                     new_text = text
                 elif args.mixed_policy == "cap_only":
-                    # Only promote lowercase to caps; do not decap anything
                     new_text = force_cap(text)
                     if new_text != text:
                         mixed_changed += 1
-                    review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv_cap_only_applied"})
-                else:  # normalize_anyway
-                    # Apply both: cap lowercase, then decap any remaining caps if KJV has lowercase too.
-                    # This is aggressive and can be wrong if your sentence structure differs.
+                    review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv_cap_only"})
+                else:
                     tmp = force_cap(text)
                     new_text = force_decap(tmp)
                     if new_text != text:
                         mixed_changed += 1
-                    review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv_normalize_anyway_applied"})
+                    review.append({"ref": ref, "reason": "mixed_pronouns_in_kjv_normalize_anyway"})
 
             else:
                 none += 1
