@@ -4,7 +4,8 @@
             sources/kjv/eng-kjv.osis.xml \
             sources/kjv/kjv.jsonl
 
-      - name: Sanity check KJV jsonl is non-empty
+- name: Sanity check KJV jsonl is non-empty
         run: |
           test -s sources/kjv/kjv.jsonl
           wc -l sources/kjv/kjv.jsonl
+
