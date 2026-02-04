@@ -71,15 +71,17 @@ jobs:
 
       - name: Run Phase 3 poetry pass
         env:
-             OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-             mkdir -p output_phase3
-             python scripts/polish.py \
-               --in output/${{ github.event.inputs.book }}.jsonl \
-               --targets ${{ github.event.inputs.targets }} \
-               --charter charter/phase3_poetry_charter.txt \
-               --out output_phase3/${{ github.event.inputs.book }}.jsonl \
-               --enforce
+          mkdir -p output_phase3
+          python scripts/polish.py \
+            --in output/${{ github.event.inputs.book }}.jsonl \
+            --targets ${{ github.event.inputs.targets }} \
+            --charter charter/phase3_poetry_charter.txt \
+            --out output_phase3/${{ github.event.inputs.book }}.jsonl \
+            --enforce \
+            --heritage_kjv \
+            --kjv_path sources/kjv/kjv.jsonl
 
       - name: Commit Phase 3 output
         run: |
