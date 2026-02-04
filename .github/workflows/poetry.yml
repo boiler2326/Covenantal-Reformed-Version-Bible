@@ -82,6 +82,7 @@ jobs:
             --enforce \
             --heritage_kjv \
             --kjv_path sources/kjv/kjv.jsonl
+            --kjv_case \
 
       - name: Commit Phase 3 output
         run: |
