@@ -1,26 +1,4 @@
 #!/usr/bin/env python3
-"""
-Phase-2 cadence & beauty polish.
-
-IMPORTANT DESIGN:
-- Phase 2 is for cadence/beauty ONLY and must not "decide" divine pronouns.
-- Divine pronoun capitalization is handled downstream by KJV normalization
-  (your Option 2: caps + decaps by KJV), not here.
-
-This script therefore avoids pronoun heuristics, with ONLY a few narrow,
-explicitly requested, deterministic corrections:
-  - "The Lord, the God" -> "The LORD, the God"
-  - If "Pharaoh" appears: "His servants" -> "his servants"
-  - "by my name" -> "by My name"
-
-Input JSONL:
-{"ref":"EXOD 1:1","translation":"..."}
-
-Targets JSONL:
-{"ref":"EXOD 1:1"}
-
-Output JSONL matches input.
-"""
 
 import argparse
 import json
@@ -32,26 +10,22 @@ from typing import Dict, List, Set, Tuple, Optional
 from openai import OpenAI
 
 
-# ----------------------------
-# IO helpers
-# ----------------------------
-
 def load_targets_jsonl(path: str) -> Set[str]:
     targets: Set[str] = set()
     with open(path, "r", encoding="utf-8") as f:
-        for i, line in enumerate(f, start=1):
+        for line in f:
             line = line.strip()
             if not line:
                 continue
             obj = json.loads(line)
-            ref = (obj.get("ref") or "").strip()
+            ref = obj.get("ref", "").strip()
             if not ref:
-                raise ValueError(f"{path}:{i} missing 'ref'")
+                raise ValueError("targets.jsonl line missing 'ref'")
             targets.add(ref)
     return targets
 
 
-def load_book_jsonl(path: str) -> List[Dict[str, str]]:
+def load_phase_jsonl(path: str) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
     with open(path, "r", encoding="utf-8") as f:
         for i, line in enumerate(f, start=1):
@@ -60,9 +34,25 @@ def load_book_jsonl(path: str) -> List[Dict[str, str]]:
                 continue
             obj = json.loads(line)
             if "ref" not in obj or "translation" not in obj:
-                raise ValueError(f"{path}:{i} missing keys 'ref' and/or 'translation'")
-            rows.append({"ref": str(obj["ref"]).strip(), "translation": str(obj["translation"])})
+                raise ValueError(f"Input jsonl missing keys at line {i}")
+            rows.append({"ref": obj["ref"], "translation": obj["translation"]})
     return rows
+
+
+def load_kjv_jsonl(path: str) -> Dict[str, str]:
+    kjv: Dict[str, str] = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            ref = (obj.get("ref") or "").strip()
+            txt = (obj.get("kjv") or obj.get("text") or "").strip()
+            if not ref or not txt:
+                continue
+            kjv[ref] = txt
+    return kjv
 
 
 def read_text_file(path: str) -> str:
@@ -70,31 +60,31 @@ def read_text_file(path: str) -> str:
         return f.read().strip()
 
 
-# ----------------------------
-# Guards
-# ----------------------------
-
 def normalize_space(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def strip_internal_linebreaks(s: str) -> str:
+    # Force single-line verse output
+    return normalize_space(s.replace("\r", " ").replace("\n", " "))
+
+
 def similarity_guard(original: str, revised: str) -> Tuple[bool, str]:
-    """
-    Guard against model drift into commentary/headings/verse numbers or huge length changes.
-    """
     o = normalize_space(original)
     r = normalize_space(revised)
 
     if not r:
         return False, "empty_output"
 
-    lower = r.lower()
-    if r.startswith("#") or lower.startswith(("note:", "commentary:", "explanation:", "translator", "translation note")):
+    # Reject “commentary”
+    if r.startswith("#") or r.lower().startswith(("note:", "commentary:", "explanation:", "translator")):
         return False, "commentary_or_heading"
 
+    # Reject if it starts like “23 …”
     if re.match(r"^\d+\s", r):
         return False, "added_verse_number"
 
+    # Basic length sanity (don’t let it collapse or balloon)
     if len(o) >= 20:
         ratio = len(r) / max(1, len(o))
         if ratio < 0.60:
@@ -105,136 +95,89 @@ def similarity_guard(original: str, revised: str) -> Tuple[bool, str]:
     return True, "ok"
 
 
-# ----------------------------
-# Deterministic enforcement (NO general pronoun changes)
-# ----------------------------
-
-def enforce_no_internal_line_breaks(text: str) -> str:
-    # Replace embedded newlines with spaces and normalize whitespace
-    t = re.sub(r"[\r\n]+", " ", text)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
+# -------------------------
+# Deterministic enforcement
+# -------------------------
 
 def enforce_between_from(text: str) -> str:
-    t = text
-    t = re.sub(r"\bseparated between\b", "separated", t, flags=re.IGNORECASE)
-    t = re.sub(r"\bdivid(e|ing) between\b", r"divid\1", t, flags=re.IGNORECASE)
-
-    t = re.sub(
+    text = re.sub(r"\bseparated between\b", "separated", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bdivid(e|ing) between\b", r"divid\1", text, flags=re.IGNORECASE)
+    text = re.sub(
         r"\bto divide\s+between\s+([^,;]+?)\s+and\s+between\s+([^,;]+?)\b",
         r"to divide \1 from \2",
-        t,
+        text,
         flags=re.IGNORECASE,
     )
-    t = re.sub(
+    text = re.sub(
         r"\bto divide\s+([^,;]+?)\s+and\s+between\s+([^,;]+?)\b",
         r"to divide \1 from \2",
-        t,
+        text,
         flags=re.IGNORECASE,
     )
-    t = re.sub(
+    text = re.sub(
         r"\bseparated\s+between\s+([^,;]+?)\s+and\s+the\s+([^,;]+?)\b",
         r"separated \1 from the \2",
-        t,
+        text,
         flags=re.IGNORECASE,
     )
-    t = re.sub(
+    text = re.sub(
         r"\bseparated\s+between\s+([^,;]+?)\s+and\s+([^,;]+?)\b",
         r"separated \1 from \2",
-        t,
+        text,
         flags=re.IGNORECASE,
     )
-    return t
-
-
-def enforce_compound_numbers(text: str) -> str:
-    t = text
-    t = re.sub(
-        r"\b(sixty|seventy|eighty|ninety)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
-        r"\1-\2",
-        t,
-        flags=re.IGNORECASE,
-    )
-    t = re.sub(
-        r"\b(twenty|thirty|forty|fifty)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
-        r"\1-\2",
-        t,
-        flags=re.IGNORECASE,
-    )
-    return t
+    return text
 
 
 def enforce_lord_caps(text: str) -> str:
-    """
-    Normalize YHWH renderings to LORD in common English phrases while protecting 'Lord GOD'.
-    """
-    t = text
+    # Keep "Lord GOD" as-is (Adonai YHWH style)
+    text = re.sub(r"\bthe Lord GOD\b", "the Lord GOD", text)
 
-    # Preserve "Lord GOD" phrases as-is
-    t = re.sub(r"\bLord GOD\b", "Lord GOD", t)
-    t = re.sub(r"\bthe Lord GOD\b", "the Lord GOD", t)
+    # Normalize "Lord God" -> "LORD God"
+    text = re.sub(r"\bLord God\b", "LORD God", text)
 
-    # Common narrative/speech formulas
-    patterns = [
-        (r"\bAnd the Lord said\b", "And the LORD said"),
-        (r"\bThen the Lord said\b", "Then the LORD said"),
-        (r"\bNow the Lord said\b", "Now the LORD said"),
-        (r"\bThus says the Lord\b", "Thus says the LORD"),
-        (r"\bThus saith the Lord\b", "Thus saith the LORD"),
-        (r"\bthe Lord said\b", "the LORD said"),
-        (r"\bthe Lord spoke\b", "the LORD spoke"),
-        (r"\bthe Lord called\b", "the LORD called"),
-        (r"\bthe Lord commanded\b", "the LORD commanded"),
-    ]
-    for pat, rep in patterns:
-        t = re.sub(pat, rep, t)
+    # Narrative formula "And the Lord said" -> "And the LORD said"
+    text = re.sub(r"\bAnd the Lord said\b", "And the LORD said", text)
 
-    # Punctuation variants
-    t = re.sub(r"\bThe Lord,\b", "The LORD,", t)
-    t = re.sub(r"\bthe Lord,\b", "the LORD,", t)
-
-    # General "the Lord" -> "the LORD" (avoid "the LORD GOD")
-    t = re.sub(r"\bthe Lord\b(?!\s+GOD\b)", "the LORD", t)
-
-    # "Lord God" -> "LORD God"
-    t = re.sub(r"\bLord God\b", "LORD God", t)
+    # General: "the Lord" -> "the LORD" (but avoid changing "Lord GOD")
+    text = re.sub(r"\bthe Lord\b(?!\s+GOD\b)", "the LORD", text)
 
     # Keep "angel of the LORD" consistent
-    t = re.sub(r"\bangel of the Lord\b", "angel of the LORD", t)
+    text = re.sub(r"\bangel of the Lord\b", "angel of the LORD", text)
 
-    return t
+    return text
 
 
-def enforce_yhwh_titlecase(text: str) -> str:
+def enforce_compound_numbers(text: str) -> str:
+    text = re.sub(
+        r"\b(sixty|seventy|eighty|ninety)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
+        r"\1-\2",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(twenty|thirty|forty|fifty)\s+and\s+(one|two|three|four|five|six|seven|eight|nine)\b",
+        r"\1-\2",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
+def enforce_reverential_pronouns_minimal(text: str) -> str:
     """
-    Fix cases like 'The Lord, the God of...' that should be 'The LORD, the God of...'
-    Very narrow: only when 'the God' immediately follows.
+    Minimal, conservative pronoun-cap rule:
+    Capitalize He/Him/His/Himself only when God/LORD appears in the same verse.
+    (You later adopted KJV normalization for full correctness; keep this minimal.)
     """
-    t = text
-    t = re.sub(r"\bThe Lord,\s+the God\b", "The LORD, the God", t)
-    t = re.sub(r"\bthe Lord,\s+the God\b", "the LORD, the God", t)
-    return t
+    if not re.search(r"\b(God|LORD|Lord GOD|the LORD)\b", text):
+        return text
 
-
-def enforce_pharaoh_servants_pronoun(text: str) -> str:
-    """
-    If Pharaoh is explicit and we see 'His servants' in the same verse,
-    force lowercase because antecedent is Pharaoh.
-    Narrow + safe.
-    """
-    t = text
-    if re.search(r"\bPharaoh\b", t) and re.search(r"\bHis servants\b", t):
-        t = re.sub(r"\bHis servants\b", "his servants", t)
-    return t
-
-
-def enforce_by_my_name_my(text: str) -> str:
-    """
-    Fix 'by my name' -> 'by My name' (narrow).
-    Only triggers for the specific phrase to avoid broad pronoun heuristics.
-    """
-    return re.sub(r"\bby my name\b", "by My name", text)
+    text = re.sub(r"\bhe\b", "He", text)
+    text = re.sub(r"\bhim\b", "Him", text)
+    text = re.sub(r"\bhis\b", "His", text)
+    text = re.sub(r"\bhimself\b", "Himself", text)
+    return text
 
 
 def validate_enforcement(text: str) -> None:
@@ -243,90 +186,121 @@ def validate_enforcement(text: str) -> None:
 
 
 def apply_enforcement(text: str) -> str:
-    t = text
-    t = enforce_no_internal_line_breaks(t)
-
-    # LORD/YHWH conventions
-    t = enforce_lord_caps(t)
-    t = enforce_yhwh_titlecase(t)
-
-    # Narrow, safe, explicitly requested fixes
-    t = enforce_pharaoh_servants_pronoun(t)
-    t = enforce_by_my_name_my(t)
-
-    # Other style normalizations
-    t = enforce_between_from(t)
-    t = enforce_compound_numbers(t)
-
-    validate_enforcement(t)
-    return t
+    text = enforce_lord_caps(text)
+    text = enforce_between_from(text)
+    text = enforce_compound_numbers(text)
+    text = enforce_reverential_pronouns_minimal(text)
+    validate_enforcement(text)
+    return text
 
 
-# ----------------------------
-# Main
-# ----------------------------
+# -------------------------
+# Phase-3 heritage mode
+# -------------------------
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Phase-2 cadence/beauty polish (no pronoun heuristics).")
+def build_system_prompt(charter_text: str) -> str:
+    return (
+        charter_text
+        + "\n\n"
+        + "GLOBAL OUTPUT RULES\n"
+        + "- Do NOT add verse numbers, headings, or commentary.\n"
+        + "- Output ONLY the revised verse text.\n"
+        + "- Output must be ONE line (no internal line breaks).\n"
+    )
+
+
+def build_user_prompt(ref: str, original: str, heritage_kjv: bool, kjv_text: Optional[str]) -> str:
+    if heritage_kjv and kjv_text:
+        return (
+            f"REFERENCE: {ref}\n"
+            f"Task: Revise the English verse for oral readability, cadence, and recognizability.\n"
+            f"Constraints: do NOT change meaning or theology. Do NOT add commentary.\n"
+            f"Style: Preserve or recover widely recognized historic phrasing when faithful.\n"
+            f"Avoid archaic pronouns (thou/thee/thy). Mild older phrasing is acceptable if remembered.\n"
+            f"Output only the revised verse text as ONE line.\n\n"
+            f"KJV CADENCE ANCHOR (public domain):\n{kjv_text}\n\n"
+            f"CURRENT VERSE TO REVISE:\n{original}\n"
+        )
+
+    return (
+        f"REFERENCE: {ref}\n"
+        f"Task: Revise the following English verse for cadence and beauty.\n"
+        f"Constraints: do NOT change meaning or theology. Do NOT add commentary.\n"
+        f"Output only the revised verse text as ONE line.\n\n"
+        f"CURRENT VERSE:\n{original}\n"
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Polish pass (Phase 2/3 via charter + targets)")
     parser.add_argument("--in", dest="inp", required=True)
     parser.add_argument("--out", dest="out", required=True)
     parser.add_argument("--targets", required=True)
     parser.add_argument("--charter", required=True)
+
     parser.add_argument("--model", default="gpt-5.1")
     parser.add_argument("--temperature", type=float, default=0.2)
-    parser.add_argument("--max_output_tokens", type=int, default=300)
     parser.add_argument("--sleep", type=float, default=0.0)
+    parser.add_argument("--max_output_tokens", type=int, default=300)
+
     parser.add_argument("--enforce", action="store_true", help="Apply deterministic enforcement rules")
-    parser.add_argument("--enforce_only", action="store_true", help="Skip model calls; enforcement-only pass")
+    parser.add_argument("--enforce_only", action="store_true", help="Do not call model; only enforcement")
+
+    # Phase-3 heritage options
+    parser.add_argument("--kjv_path", default="", help="Path to KJV JSONL (ref->kjv)")
+    parser.add_argument("--heritage_kjv", action="store_true", help="Use KJV verse as cadence anchor in prompt")
+
     args = parser.parse_args()
 
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not args.enforce_only and not api_key:
+        raise RuntimeError("OPENAI_API_KEY is missing or empty")
+
     targets = load_targets_jsonl(args.targets)
-    rows = load_book_jsonl(args.inp)
-    charter = read_text_file(args.charter)
+    rows = load_phase_jsonl(args.inp)
+    charter_text = read_text_file(args.charter)
+    system_prompt = build_system_prompt(charter_text)
 
-    system_prompt = (
-        charter
-        + "\n\nPHASE-2 OPERATIONAL RULES\n"
-        + "- You are NOT translating Hebrew or Greek.\n"
-        + "- Revise English ONLY for cadence, beauty, and recognizability.\n"
-        + "- Meaning must remain unchanged.\n"
-        + "- Do NOT add verse numbers, headings, or commentary.\n"
-        + "- Output ONLY the revised verse text.\n"
-    )
+    kjv_map: Dict[str, str] = {}
+    if args.heritage_kjv:
+        if not args.kjv_path:
+            raise ValueError("--heritage_kjv requires --kjv_path")
+        if not os.path.isfile(args.kjv_path):
+            raise FileNotFoundError(f"KJV file not found: {args.kjv_path}")
+        if os.path.getsize(args.kjv_path) == 0:
+            raise ValueError(f"KJV file is empty (0 bytes): {args.kjv_path}")
+        kjv_map = load_kjv_jsonl(args.kjv_path)
 
-    client: Optional[OpenAI] = None
-    if not args.enforce_only:
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is missing or empty (required unless --enforce_only)")
-        client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key) if not args.enforce_only else None
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
-    changed_by_model = 0
-    guard_blocked = 0
-    enforcement_changed = 0
-    model_calls = 0
+    changed = 0
+    blocked = 0
+    missing_kjv = 0
 
     with open(args.out, "w", encoding="utf-8") as fout:
         for row in rows:
             ref = row["ref"]
-            original = row["translation"]
+            original = strip_internal_linebreaks(row["translation"])
+
+            # Default: carry original through unchanged
             out_text = original
 
-            do_model = (not args.enforce_only) and (ref in targets)
+            # Decide whether to run model for this verse
+            should_polish = (ref in targets) and (not args.enforce_only)
 
-            if do_model:
-                assert client is not None
-                user_prompt = (
-                    f"REFERENCE: {ref}\n"
-                    f"Revise the following English verse for cadence and beauty.\n"
-                    f"Do not change meaning or theology.\n"
-                    f"Output only the revised verse text.\n\n"
-                    f"ORIGINAL ENGLISH:\n{original}\n"
-                )
+            if should_polish:
+                kjv_text = None
+                if args.heritage_kjv:
+                    kjv_text = kjv_map.get(ref)
+                    if not kjv_text:
+                        # Not fatal; we can still polish without KJV anchor
+                        missing_kjv += 1
 
-                resp = client.responses.create(
+                user_prompt = build_user_prompt(ref, original, args.heritage_kjv, kjv_text)
+
+                response = client.responses.create(
                     model=args.model,
                     input=[
                         {"role": "system", "content": system_prompt},
@@ -335,45 +309,34 @@ def main() -> None:
                     temperature=args.temperature,
                     max_output_tokens=args.max_output_tokens,
                 )
-                model_calls += 1
-                candidate = (resp.output_text or "").strip()
+
+                revised = strip_internal_linebreaks(response.output_text.strip())
 
                 if args.enforce:
-                    enforced = apply_enforcement(candidate)
-                    if normalize_space(enforced) != normalize_space(candidate):
-                        enforcement_changed += 1
-                    candidate = enforced
+                    revised = apply_enforcement(revised)
 
-                ok, reason = similarity_guard(original, candidate)
+                ok, reason = similarity_guard(original, revised)
                 if not ok:
                     print(f"WARNING: Guard blocked {ref}: {reason}")
-                    out_text = original
-                    guard_blocked += 1
+                    revised = original
+                    blocked += 1
                 else:
-                    out_text = candidate
-                    if normalize_space(out_text) != normalize_space(original):
-                        changed_by_model += 1
+                    if normalize_space(revised) != normalize_space(original):
+                        changed += 1
+
+                out_text = revised
 
             else:
-                # Non-target or enforce-only
+                # no model call; only enforcement optionally
                 if args.enforce:
-                    enforced = apply_enforcement(out_text)
-                    if normalize_space(enforced) != normalize_space(out_text):
-                        enforcement_changed += 1
-                    out_text = enforced
+                    out_text = apply_enforcement(out_text)
 
             fout.write(json.dumps({"ref": ref, "translation": out_text}, ensure_ascii=False) + "\n")
 
-            if args.sleep and do_model:
+            if args.sleep:
                 time.sleep(args.sleep)
 
-    print(
-        "Phase-2 complete. "
-        f"Changed(by model): {changed_by_model} | "
-        f"Guard-blocked: {guard_blocked} | "
-        f"Enforcement-changed: {enforcement_changed} | "
-        f"Model-calls: {model_calls}"
-    )
+    print(f"Polish complete. Changed: {changed} | Guard-blocked: {blocked} | Missing KJV refs: {missing_kjv}")
 
 
 if __name__ == "__main__":
