@@ -81,8 +81,8 @@ jobs:
             --out output_phase3/${{ github.event.inputs.book }}.jsonl \
             --enforce \
             --heritage_kjv \
-            --kjv_path sources/kjv/kjv.jsonl
-            --kjv_case \
+            --kjv_path sources/kjv/kjv.jsonl \
+            --kjv_case 
 
       - name: Commit Phase 3 output
         run: |
