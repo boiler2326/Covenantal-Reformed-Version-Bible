@@ -1,0 +1,14 @@
+{
+  "total": 959,
+  "changed": 0,
+  "missing_kjv": 959,
+  "classified": {
+    "divine_only": 0,
+    "human_only": 0,
+    "mixed": 0,
+    "none": 0
+  },
+  "mixed_policy": "skip",
+  "mixed_changed": 0,
+  "review_targets": 959
+}
