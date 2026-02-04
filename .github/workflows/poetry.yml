@@ -33,6 +33,8 @@ jobs:
 
       - name: Verify inputs exist
         run: |
+          ls -la output || true
+          echo "Expected: output/${{ github.event.inputs.book }}.jsonl"
           test -f output/${{ github.event.inputs.book }}.jsonl
           test -f ${{ github.event.inputs.targets }}
           test -f charter/phase3_poetry_charter.txt
