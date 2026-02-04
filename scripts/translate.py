@@ -53,6 +53,7 @@ MILD_ARCHAIC_REPLACEMENTS: List[Tuple[str, str]] = [
     (r"\btherewith\b", "with it"),
     (r"\bwhence\b", "from where"),
     (r"\bhenceforth\b", "from now on"),
+    (r"\bart\b", "are"),
 ]
 
 def dearchaicize(text: str) -> Tuple[str, List[str]]:
@@ -77,7 +78,7 @@ def dearchaicize(text: str) -> Tuple[str, List[str]]:
 # These are "too-KJV" for your current register goals; hard fail to keep consistency.
 STRONG_ARCHAIC_TERMS = [
     "thou", "thee", "thy", "thine",
-    "ye", "hath", "doth", "art", "shalt", "wilt",
+    "ye", "hath", "doth", "shalt", "wilt",
     "wherefore",
 ]
 
