@@ -1,0 +1,64 @@
+name: Phase 3 – Poetry / Liturgical Pass
+
+on:
+  workflow_dispatch:
+    inputs:
+      book:
+        description: "Book filename to poetry-polish (e.g., psalms, song_of_songs)"
+        required: true
+        default: "psalms"
+      targets:
+        description: "Targets file (e.g., phase3/psalms_targets.jsonl)"
+        required: true
+        default: "phase3/psalms_targets.jsonl"
+
+jobs:
+  poetry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install openai
+
+      - name: Verify inputs exist
+        run: |
+          test -f output/${{ github.event.inputs.book }}.jsonl
+          test -f ${{ github.event.inputs.targets }}
+          test -f charter/phase3_poetry_charter.txt
+          test -f sources/kjv/kjv.jsonl
+          test -f scripts/polish.py
+
+      - name: Run Phase 3 poetry pass
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p output_phase3
+          python scripts/polish.py \
+            --in output/${{ github.event.inputs.book }}.jsonl \
+            --targets ${{ github.event.inputs.targets }} \
+            --charter charter/phase3_poetry_charter.txt \
+            --out output_phase3/${{ github.event.inputs.book }}.jsonl \
+            --enforce \
+            --kjv sources/kjv/kjv.jsonl \
+            --kjv_case \
+            --kjv_punct
+
+      - name: Commit Phase 3 output
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add output_phase3/${{ github.event.inputs.book }}.jsonl
+          git commit -m "Phase 3 poetry pass: ${{ github.event.inputs.book }}" || echo "No changes to commit"
+          git pull --rebase origin main
+          git push origin main
