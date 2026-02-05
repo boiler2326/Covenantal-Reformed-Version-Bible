@@ -1,0 +1,65 @@
+name: Capitalization Suggestions
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "suggest | apply"
+        required: true
+        default: "suggest"
+      input_jsonl:
+        description: "Path to input JSONL"
+        required: true
+        default: "data/psalms.jsonl"
+      suggestions_csv:
+        description: "Path to write suggestions CSV"
+        required: true
+        default: "reviews/capitalization_suggestions.csv"
+      review_csv:
+        description: "Path to reviewed CSV (with APPROVE/REJECT)"
+        required: false
+        default: "reviews/capitalization_suggestions.review.csv"
+      output_jsonl:
+        description: "Path to write updated JSONL when applying"
+        required: false
+        default: "data/psalms.updated.jsonl"
+
+jobs:
+  caps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ensure folders exist
+        run: |
+          mkdir -p scripts reviews data
+
+      - name: Suggest changes
+        if: ${{ inputs.mode == 'suggest' }}
+        run: |
+          python scripts/suggest_caps.py "${{ inputs.input_jsonl }}" "${{ inputs.suggestions_csv }}"
+
+      - name: Upload suggestions artifact
+        if: ${{ inputs.mode == 'suggest' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: capitalization-suggestions
+          path: ${{ inputs.suggestions_csv }}
+
+      - name: Apply approved changes
+        if: ${{ inputs.mode == 'apply' }}
+        run: |
+          python scripts/apply_caps.py "${{ inputs.input_jsonl }}" "${{ inputs.review_csv }}" "${{ inputs.output_jsonl }}"
+
+      - name: Upload updated JSONL artifact
+        if: ${{ inputs.mode == 'apply' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: psalms-updated
+          path: ${{ inputs.output_jsonl }}
