@@ -16,11 +16,11 @@ on:
         required: true
         default: "reviews/capitalization_suggestions.csv"
       review_csv:
-        description: "Reviewed CSV (with decision=APPROVE/REJECT)"
+        description: "Reviewed CSV (decision=APPROVE/REJECT)"
         required: false
         default: "reviews/capitalization_suggestions.review.csv"
       output_jsonl:
-        description: "Where to write updated JSONL when applying"
+        description: "Where to write updated JSONL (apply mode)"
         required: false
         default: "data/psalms.updated.jsonl"
 
@@ -40,14 +40,10 @@ jobs:
         run: |
           mkdir -p reviews data
 
-      # ---------------------------
-      # MODE: SUGGEST
-      # ---------------------------
       - name: Generate suggestions CSV
         if: ${{ inputs.mode == 'suggest' }}
         run: |
           python scripts/suggest_caps.py "${{ inputs.input_jsonl }}" "${{ inputs.suggestions_csv }}"
-          echo "Wrote suggestions to: ${{ inputs.suggestions_csv }}"
           ls -lah reviews
 
       - name: Upload suggestions artifact
@@ -57,35 +53,47 @@ jobs:
           name: capitalization-suggestions
           path: ${{ inputs.suggestions_csv }}
 
-      # ---------------------------
-      # MODE: APPLY
-      # ---------------------------
-
-      - name: Normalize reviewed CSV to UTF-8 (fix Excel encoding)
+      - name: Convert reviewed CSV to UTF-8 (Python)
         if: ${{ inputs.mode == 'apply' }}
         run: |
-          if [ ! -f "${{ inputs.review_csv }}" ]; then
-            echo "ERROR: Reviewed CSV not found at ${{ inputs.review_csv }}"
-            echo "Make sure you committed it to the repo, or check the path."
-            exit 1
-          fi
-
-          # Convert common Excel encoding (Windows-1252) to UTF-8
-          iconv -f WINDOWS-1252 -t UTF-8 "${{ inputs.review_csv }}" > "${{ inputs.review_csv }}.utf8"
-
-          # Normalize common smart quotes to straight quotes (optional, but helpful)
           python - <<'PY'
-          import pathlib
-          p = pathlib.Path("${{ inputs.review_csv }}.utf8")
-          s = p.read_text(encoding="utf-8")
+          from pathlib import Path
+
+          inp = Path("${{ inputs.review_csv }}")
+          out = Path("${{ inputs.review_csv }}.utf8")
+
+          if not inp.exists():
+              raise SystemExit(f"ERROR: Reviewed CSV not found: {inp}")
+
+          b = inp.read_bytes()
+
+          # Try common Excel encodings (stop at first that works)
+          s = None
+          used = None
+          for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1", "utf-16", "utf-16le", "utf-16be"):
+              try:
+                  s = b.decode(enc)
+                  used = enc
+                  break
+              except UnicodeDecodeError:
+                  pass
+
+          if s is None:
+              # Last resort: replace undecodable bytes (tripwire below will catch this)
+              used = "utf-8(errors=replace)"
+              s = b.decode("utf-8", errors="replace")
+
+          # Normalize smart quotes
           s = (s.replace("“", '"').replace("”", '"')
                  .replace("‘", "'").replace("’", "'"))
-          p.write_text(s, encoding="utf-8")
-          print("Normalized smart quotes in:", p)
-          PY
 
-          echo "UTF-8 reviewed CSV created at: ${{ inputs.review_csv }}.utf8"
-          ls -lah reviews
+          out.write_text(s, encoding="utf-8")
+          print(f"Wrote UTF-8 reviewed CSV: {out} (decoded as {used})")
+
+          # Tripwire: fail if replacement characters appear
+          if "�" in s:
+              raise SystemExit("ERROR: Replacement character (�) found after conversion. Re-export CSV as UTF-8 or edit in VS Code.")
+          PY
 
       - name: Apply approved changes
         if: ${{ inputs.mode == 'apply' }}
@@ -94,8 +102,6 @@ jobs:
             "${{ inputs.input_jsonl }}" \
             "${{ inputs.review_csv }}.utf8" \
             "${{ inputs.output_jsonl }}"
-
-          echo "Wrote updated JSONL to: ${{ inputs.output_jsonl }}"
           ls -lah data
 
       - name: Upload updated JSONL artifact
