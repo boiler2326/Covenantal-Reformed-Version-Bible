@@ -10,17 +10,17 @@ on:
       input_jsonl:
         description: "Path to input JSONL"
         required: true
-        default: "data/psalms.jsonl"
+        default: "output_phase3/psalms.jsonl"
       suggestions_csv:
-        description: "Path to write suggestions CSV"
+        description: "Where to write suggestions CSV"
         required: true
         default: "reviews/capitalization_suggestions.csv"
       review_csv:
-        description: "Path to reviewed CSV (with APPROVE/REJECT)"
+        description: "Reviewed CSV (with decision=APPROVE/REJECT)"
         required: false
         default: "reviews/capitalization_suggestions.review.csv"
       output_jsonl:
-        description: "Path to write updated JSONL when applying"
+        description: "Where to write updated JSONL when applying"
         required: false
         default: "data/psalms.updated.jsonl"
 
@@ -36,14 +36,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Ensure folders exist
+      - name: Create output directories
         run: |
-          mkdir -p scripts reviews data
+          mkdir -p reviews data
 
-      - name: Suggest changes
+      # ---------------------------
+      # MODE: SUGGEST
+      # ---------------------------
+      - name: Generate suggestions CSV
         if: ${{ inputs.mode == 'suggest' }}
         run: |
           python scripts/suggest_caps.py "${{ inputs.input_jsonl }}" "${{ inputs.suggestions_csv }}"
+          echo "Wrote suggestions to: ${{ inputs.suggestions_csv }}"
+          ls -lah reviews
 
       - name: Upload suggestions artifact
         if: ${{ inputs.mode == 'suggest' }}
@@ -52,10 +57,46 @@ jobs:
           name: capitalization-suggestions
           path: ${{ inputs.suggestions_csv }}
 
+      # ---------------------------
+      # MODE: APPLY
+      # ---------------------------
+
+      - name: Normalize reviewed CSV to UTF-8 (fix Excel encoding)
+        if: ${{ inputs.mode == 'apply' }}
+        run: |
+          if [ ! -f "${{ inputs.review_csv }}" ]; then
+            echo "ERROR: Reviewed CSV not found at ${{ inputs.review_csv }}"
+            echo "Make sure you committed it to the repo, or check the path."
+            exit 1
+          fi
+
+          # Convert common Excel encoding (Windows-1252) to UTF-8
+          iconv -f WINDOWS-1252 -t UTF-8 "${{ inputs.review_csv }}" > "${{ inputs.review_csv }}.utf8"
+
+          # Normalize common smart quotes to straight quotes (optional, but helpful)
+          python - <<'PY'
+          import pathlib
+          p = pathlib.Path("${{ inputs.review_csv }}.utf8")
+          s = p.read_text(encoding="utf-8")
+          s = (s.replace("“", '"').replace("”", '"')
+                 .replace("‘", "'").replace("’", "'"))
+          p.write_text(s, encoding="utf-8")
+          print("Normalized smart quotes in:", p)
+          PY
+
+          echo "UTF-8 reviewed CSV created at: ${{ inputs.review_csv }}.utf8"
+          ls -lah reviews
+
       - name: Apply approved changes
         if: ${{ inputs.mode == 'apply' }}
         run: |
-          python scripts/apply_caps.py "${{ inputs.input_jsonl }}" "${{ inputs.review_csv }}" "${{ inputs.output_jsonl }}"
+          python scripts/apply_caps.py \
+            "${{ inputs.input_jsonl }}" \
+            "${{ inputs.review_csv }}.utf8" \
+            "${{ inputs.output_jsonl }}"
+
+          echo "Wrote updated JSONL to: ${{ inputs.output_jsonl }}"
+          ls -lah data
 
       - name: Upload updated JSONL artifact
         if: ${{ inputs.mode == 'apply' }}
